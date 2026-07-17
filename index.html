@@ -1345,8 +1345,13 @@ function createClingSim(level){
     ball.ignoreOwner = owner;
     ball.ignoreClearDist = 0;
     ball.ignoreArcFromS = null; ball.ignoreArcNeed = 0;
-    ball.ignoreClearBelowY = ownerMaxY(owner);
-    if (ball.ignoreClearBelowY == null) ball.ignoreClearBelowY = py;
+    // Clear only once fully below the owner's lowest extent. The +radius+dropSpeed
+    // margin keeps the fall-scan band (prevY - radius) from re-capturing the rail
+    // just left. Thick bars get this for free (their bottom edge sits 16px under
+    // the landable top face); zero-thickness walls need it explicitly.
+    let below = ownerMaxY(owner);
+    if (below == null) below = py;
+    ball.ignoreClearBelowY = below + SIM.BALL_RADIUS + SIM.DROP_SPEED;
   }
   function isOnArenaFloor(){
     if (ball.rail !== 1) return false;
@@ -1370,15 +1375,20 @@ function createClingSim(level){
     if (len <= 1e-6) return [0,0];
     return [dy/len, -dx/len];
   }
-  function segmentIsLandable(rail, segIndex1, seg){
+  function segmentIsLandable(railIndex, rail, segIndex1, seg){
     // segIndex1 is 1-BASED, matching the Lua.
+    // NOTE: the attached cling_ball.lua distinguishes the arena by "not rail.kind",
+    // which also matches plain walls and makes them fall-through — contradicting
+    // L2 "Drop In" ("Fall and land on flat tops") and leaving the open-rail branch
+    // of landFromFall unreachable. We follow the evident intent: arena = rail 1,
+    // every other rail is landable where its standing normal points up.
     const faceNy = faceNyThreshold();
     if (rail.kind === "bar_outline"){
       if (segIndex1 === 1) return (-rail.py) < faceNy;
       if (segIndex1 === 3) return rail.py < faceNy;
       return false;
     }
-    if (!rail.kind){
+    if (railIndex === 1){
       return segIndex1 === arenaFloorSegIndex();
     }
     const [,ny] = segmentStandingNormal(rail, seg);
@@ -1402,7 +1412,7 @@ function createClingSim(level){
       let accum = 0;
       for (let si=0; si<segs.length; si++){
         const seg = segs[si];
-        if (segmentIsLandable(r, si+1, seg)){
+        if (segmentIsLandable(i, r, si+1, seg)){
           const hit = RL.fallHitOnSegment(seg.a.x, seg.a.y, seg.b.x, seg.b.y, accum, cx, halfW, minY);
           if (hit && hit.hitY < bestY){
             if (maxY == null || hit.hitY <= maxY){
