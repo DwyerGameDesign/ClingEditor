@@ -1,0 +1,2901 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cling — Level Editor</title>
+<style>
+  :root{
+    --ink:#111111;
+    --paper:#ffffff;
+    --chrome:#1c1c1a;
+    --chrome-2:#26262a;
+    --panel:#efede6;
+    --panel-2:#e4e1d7;
+    --line:#c9c5b8;
+    --pd-yellow:#ffc500;   /* Playdate console yellow */
+    --accent:#d88100;      /* editor-overlay orange (handles) */
+    --err:#c62828;
+    --warn:#a26a00;
+    --ok:#2e7d32;
+    --mono:"SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--panel); color:var(--ink);
+    font-family:var(--mono); font-size:12px; line-height:1.45;
+    display:flex; flex-direction:column; min-width:1180px;
+  }
+  /* ---------- top bar ---------- */
+  header{
+    background:var(--chrome); color:#eee; padding:8px 14px;
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    border-bottom:4px solid var(--pd-yellow);
+  }
+  header .logo{
+    font-weight:700; letter-spacing:.14em; font-size:14px; color:var(--pd-yellow);
+    white-space:nowrap; user-select:none;
+  }
+  header .logo small{color:#bbb; letter-spacing:.06em; font-weight:400; margin-left:6px}
+  header label{display:flex; align-items:center; gap:5px; color:#cfcfcf; white-space:nowrap}
+  header input[type=text], header select{
+    background:#111; color:#eee; border:1px solid #444; padding:3px 6px;
+    font-family:var(--mono); font-size:12px;
+  }
+  header input[type=text]:focus, header select:focus{outline:1px solid var(--pd-yellow)}
+  #lvName{width:150px} #lvTheme{width:110px} #lvTutorial{width:250px}
+  .spacer{flex:1}
+  button{
+    font-family:var(--mono); font-size:12px; cursor:pointer;
+    background:#333; color:#eee; border:1px solid #555; padding:4px 10px;
+  }
+  button:hover{border-color:var(--pd-yellow); color:var(--pd-yellow)}
+  button.primary{background:var(--pd-yellow); color:#111; border-color:var(--pd-yellow); font-weight:700}
+  button.primary:hover{background:#ffd84d; color:#111}
+  button.active{background:var(--pd-yellow); color:#111; border-color:var(--pd-yellow)}
+  /* ---------- main layout ---------- */
+  main{flex:1; display:flex; min-height:0; overflow:hidden}
+  /* palette */
+  #palette{
+    width:118px; background:var(--panel-2); border-right:1px solid var(--line);
+    display:flex; flex-direction:column; gap:4px; padding:8px 6px; overflow-y:auto;
+  }
+  #palette h3, aside h3{
+    margin:2px 0 4px; font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:#666;
+  }
+  .pal-btn{
+    background:var(--paper); color:var(--ink); border:1px solid var(--line);
+    padding:5px 6px; text-align:left; font-size:11px; display:flex; align-items:center; gap:6px;
+  }
+  .pal-btn:hover{border-color:var(--ink); color:var(--ink)}
+  .pal-btn.armed{background:var(--pd-yellow); border-color:#111; font-weight:700}
+  .pal-btn .g{width:14px; text-align:center; font-weight:700}
+  /* canvas column */
+  #stage{flex:1; display:flex; flex-direction:column; align-items:center; overflow:auto; padding:12px}
+  #canvasWrap{position:relative; border:3px solid var(--ink); background:var(--paper); box-shadow:6px 6px 0 rgba(0,0,0,.18)}
+  canvas{display:block; image-rendering:pixelated; image-rendering:crisp-edges; cursor:crosshair}
+  #toolbar{
+    display:flex; gap:8px; align-items:center; margin-bottom:8px; flex-wrap:wrap; justify-content:center;
+  }
+  #toolbar .tgl{display:flex; align-items:center; gap:4px; background:var(--paper); border:1px solid var(--line); padding:3px 7px; user-select:none; cursor:pointer}
+  #toolbar .tgl input{margin:0}
+  #status{
+    margin-top:6px; color:#555; font-size:11px; display:flex; gap:18px; align-items:center; flex-wrap:wrap; justify-content:center;
+  }
+  #status b{color:#111}
+  /* right side */
+  aside{
+    width:300px; background:var(--panel-2); border-left:1px solid var(--line);
+    display:flex; flex-direction:column; min-height:0;
+  }
+  aside section{padding:8px 10px; border-bottom:1px solid var(--line); overflow-y:auto}
+  #warnPanel{max-height:130px; flex:0 0 auto}
+  #propsPanel{flex:0 0 auto; max-height:44%}
+  #listPanel{flex:1 1 auto; min-height:80px}
+  .warn-item{padding:3px 6px; margin:2px 0; border-left:3px solid var(--warn); background:#f6ecd6; color:#5c3d00}
+  .warn-item.err{border-left-color:var(--err); background:#f7dcdc; color:#7a1010}
+  .warn-item.ok{border-left-color:var(--ok); background:#e2efe2; color:#1d4b1f}
+  /* properties */
+  .prop-row{display:flex; align-items:center; gap:6px; margin:4px 0}
+  .prop-row label{width:92px; color:#444; flex:0 0 auto}
+  .prop-row input[type=number], .prop-row input[type=text]{
+    width:70px; font-family:var(--mono); font-size:12px; padding:2px 4px;
+    border:1px solid var(--line); background:var(--paper);
+  }
+  .prop-row input[type=range]{flex:1}
+  .seg{display:flex}
+  .seg button{padding:2px 8px; background:var(--paper); color:var(--ink); border:1px solid var(--line); border-left-width:0}
+  .seg button:first-child{border-left-width:1px}
+  .seg button.on{background:var(--ink); color:var(--pd-yellow); border-color:var(--ink)}
+  .muted{color:#777}
+  /* object list */
+  #objList{list-style:none; margin:0; padding:0}
+  #objList li{
+    display:flex; align-items:center; gap:6px; padding:3px 6px; margin:2px 0;
+    background:var(--paper); border:1px solid var(--line); cursor:pointer; user-select:none;
+  }
+  #objList li.sel{border-color:var(--ink); background:var(--pd-yellow)}
+  #objList li.dragover{border-top:2px solid var(--accent)}
+  #objList li .idx{color:#888; width:20px; text-align:right}
+  #objList li .typ{font-weight:700; flex:0 0 auto}
+  #objList li .pos{color:#666; margin-left:auto}
+  /* IO drawer */
+  #ioDrawer{
+    background:var(--chrome-2); color:#ddd; border-top:4px solid var(--pd-yellow);
+    padding:8px 14px; display:none; flex-direction:column; gap:6px;
+  }
+  #ioDrawer.open{display:flex}
+  #ioDrawer textarea{
+    width:100%; height:180px; background:#101010; color:#cfe8cf; border:1px solid #444;
+    font-family:var(--mono); font-size:11.5px; padding:8px; white-space:pre; resize:vertical;
+  }
+  #ioDrawer .row{display:flex; gap:8px; align-items:center}
+  #ioMsg{font-size:11px}
+  #ioMsg.err{color:#ff8a8a} #ioMsg.ok{color:#9fe89f}
+  kbd{background:#333; color:#ffd84d; border:1px solid #555; border-radius:2px; padding:0 4px; font-size:10px}
+  .hint{color:#888; font-size:10.5px; margin-top:2px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">CLING<small>level editor</small></div>
+  <label>name <input id="lvName" type="text" value="Untitled"></label>
+  <label>theme <input id="lvTheme" type="text" list="themeList" value="Roll">
+    <datalist id="themeList">
+      <option>Roll</option><option>Clockwork</option><option>Pivot</option><option>Slide</option>
+      <option>Launch</option><option>Remix</option><option>Machinery</option><option>Cling Works</option>
+    </datalist>
+  </label>
+  <label>ceiling <select id="lvCeiling">
+    <option value="solid">solid</option><option value="open">open</option><option value="spikes">spikes</option>
+  </select></label>
+  <label>tutorial <input id="lvTutorial" type="text" placeholder="(optional hint)"></label>
+  <div class="spacer"></div>
+  <label>load <select id="lvLoad"><option value="">— built-in level —</option></select></label>
+  <button id="btnNew">New</button>
+  <button id="btnIO">Import / Export</button>
+  <button id="btnPlay">&#9654; Movers</button>
+  <button id="btnTest" class="primary">&#127918; Test</button>
+</header>
+
+<main>
+  <nav id="palette">
+    <h3>Place</h3>
+    <button class="pal-btn" data-type="spawn"><span class="g">&#9678;</span>spawn</button>
+    <button class="pal-btn" data-type="exit"><span class="g">&#9633;</span>exit</button>
+    <button class="pal-btn" data-type="coin"><span class="g">&#9675;</span>coin</button>
+    <button class="pal-btn" data-type="hazard"><span class="g">&#10041;</span>hazard</button>
+    <button class="pal-btn" data-type="wall"><span class="g">&#9473;</span>wall</button>
+    <button class="pal-btn" data-type="deflector"><span class="g">&#9639;</span>deflector</button>
+    <button class="pal-btn" data-type="sweeper"><span class="g">&#10530;</span>sweeper</button>
+    <button class="pal-btn" data-type="toggle_wall"><span class="g">&#8635;</span>toggle wall</button>
+    <button class="pal-btn" data-type="sliding_wall"><span class="g">&#8703;</span>sliding wall</button>
+    <button class="pal-btn" data-type="moving_wall"><span class="g">&#8644;</span>moving wall</button>
+    <button class="pal-btn" data-type="moving_hazard"><span class="g">&#10042;</span>moving hazard</button>
+    <button class="pal-btn" data-type="launcher"><span class="g">&#10148;</span>launcher</button>
+    <div class="hint" style="margin-top:8px">Click a tool, then click the arena. <br><br><kbd>Esc</kbd> cancel / deselect<br><kbd>&#8679;</kbd> fine snap<br><kbd>&#8963;/&#8984;Z</kbd> undo<br><kbd>&#8963;/&#8984;&#8679;Z</kbd> redo<br><kbd>&#8963;/&#8984;D</kbd> duplicate<br><kbd>&#9003;</kbd> delete<br>arrows nudge 5 (&#8679;=1)</div>
+  </nav>
+
+  <div id="stage">
+    <div id="toolbar">
+      <span class="tgl"><input type="checkbox" id="ovGrid"><label for="ovGrid">grid</label></span>
+      <span class="tgl"><input type="checkbox" id="ovKill" checked><label for="ovKill">kill radii</label></span>
+      <span class="tgl"><input type="checkbox" id="ovReach" checked><label for="ovReach">deflector reach</label></span>
+      <span class="tgl"><input type="checkbox" id="ovSnap"><label for="ovSnap">snap zones</label></span>
+    </div>
+    <div id="canvasWrap"><canvas id="cv" width="800" height="480"></canvas></div>
+    <div id="status">
+      <span>cursor <b id="stCursor">—</b></span>
+      <span id="stSel" class="muted">nothing selected</span>
+      <span id="stMode" class="muted"></span>
+    </div>
+  </div>
+
+  <aside>
+    <section id="warnPanel"><h3>Checks</h3><div id="warnList"></div></section>
+    <section id="propsPanel"><h3>Properties</h3><div id="props"><div class="muted">Select an object.</div></div></section>
+    <section id="listPanel"><h3>Objects <span class="muted" id="objCount"></span></h3><ul id="objList"></ul></section>
+  </aside>
+</main>
+
+<div id="ioDrawer">
+  <div class="row">
+    <button id="btnExport" class="primary">Export Lua</button>
+    <button id="btnCopy">Copy</button>
+    <button id="btnImport">Import from text</button>
+    <span id="ioMsg"></span>
+    <div class="spacer"></div>
+    <button id="btnCloseIO">&#10005;</button>
+  </div>
+  <textarea id="ioText" spellcheck="false" placeholder='Paste a single level entry here, e.g. { name = "My Level", theme = "Roll", ceiling = "solid", objects = { ... } },'></textarea>
+</div>
+
+<script>
+"use strict";
+/* =====================================================================
+   Cling Level Editor — single file.
+   Data model is CENTER-ORIGIN, Y-UP (like levels.lua).
+   All geometry & rendering happen in SCREEN SPACE (Y-down), exactly like
+   the game; angles are stored/exported verbatim in screen convention.
+   ===================================================================== */
+
+/* ---------------- constants (config.lua) ---------------- */
+const CFG = {
+  SCREEN_W:400, SCREEN_H:240, FPS:30,
+  WALL_LINE_WIDTH:5,
+  ARENA_INSET:20,
+  BAR_WIDTH:16,
+  JUNCTION_SNAP:16,
+  WALL_SIZES:{S:50,M:70,L:100},
+  DEFLECTOR_SIZES:{S:55,M:75,L:100},
+  SLIDER_SPANS:{S:42,M:60,L:90},
+  SWEEPER_SPEEDS:{S:0.8,M:1.0,F:1.3},
+  TOGGLE_INTERVALS:{S:210,M:150,F:105},
+  MOVING_SPEEDS:{S:0.005,M:0.008,F:0.012},
+  HAZARD_RADIUS_DEFAULT:14,
+  LAUNCHER_MOUTH_DIST:18,
+};
+const ARENA = {L:-180, R:180, B:-100, T:100}; // center-origin extents
+
+/* coords.lua: toScreen / toCenter */
+function toScreen(x,y){ return [x+200, 120-y]; }
+function toCenter(sx,sy){ return [sx-200, 120-sy]; }
+const rad = d => d*Math.PI/180;
+
+const BAR_TYPES = new Set(["wall","deflector","sweeper","toggle_wall","sliding_wall","moving_wall"]);
+const SLIDE_TYPES = new Set(["sliding_wall","moving_wall","moving_hazard"]);
+const CRANKABLE = new Set(["deflector","sliding_wall","launcher"]);
+const ANGLED = new Set(["wall","deflector","sweeper","toggle_wall","sliding_wall","moving_wall","launcher"]);
+
+/* ---------------- object defaults ---------------- */
+function newObject(type, x, y){
+  const o = {type, x, y};
+  switch(type){
+    case "hazard": o.radius = CFG.HAZARD_RADIUS_DEFAULT; break;
+    case "wall": o.length = CFG.WALL_SIZES.M; o.angle = 0; break;
+    case "deflector": o.length = CFG.DEFLECTOR_SIZES.M; o.angle = 0; break;
+    case "sweeper":
+      o.length = CFG.WALL_SIZES.M; o.angle = 0; o.minAngle = 0; o.maxAngle = 90; o.speed = "M"; break;
+    case "toggle_wall":
+      o.length = CFG.WALL_SIZES.M; o.angle = 0; o.angleStep = 45; o.speed = "M"; break;
+    case "sliding_wall":
+      o.length = CFG.WALL_SIZES.M; o.angle = 0; o.slideAngle = 0; o.slideRange = "M"; o.objectPosition = 0.5; break;
+    case "moving_wall":
+      o.length = CFG.WALL_SIZES.M; o.angle = 0; o.slideAngle = 0; o.slideRange = "M"; o.objectPosition = 0.5; o.speed = "M"; break;
+    case "moving_hazard":
+      o.radius = CFG.HAZARD_RADIUS_DEFAULT; o.slideAngle = 0; o.slideRange = "M"; o.objectPosition = 0.5; o.speed = "M"; break;
+    case "launcher": o.angle = 0; break;
+  }
+  return o;
+}
+
+/* slide-rail semantics (applySlideRailConfig): span sp per letter,
+   rail from anchor−sp to anchor+sp along slideAngle (screen space),
+   pix = −sp + objectPosition·2sp. */
+function slideSpan(o){ return CFG.SLIDER_SPANS[o.slideRange] || CFG.SLIDER_SPANS.M; }
+function slidePix(o, pos){
+  const sp = slideSpan(o);
+  return -sp + (pos===undefined? o.objectPosition : pos)*2*sp;
+}
+/* body center in SCREEN space at given objectPosition */
+function slideBodyScreen(o, pos){
+  const [sx,sy] = toScreen(o.x, o.y);
+  const r = rad(o.slideAngle||0), pix = slidePix(o,pos);
+  return [sx+Math.cos(r)*pix, sy+Math.sin(r)*pix];
+}
+function barEndpointsScreen(cx,cy,len,angleDeg){
+  const a = rad(angleDeg), h = len/2, c = Math.cos(a), s = Math.sin(a);
+  return [cx-c*h, cy-s*h, cx+c*h, cy+s*h];
+}
+function nearestSpeedLetter(v, table){
+  let best="M", bd=Infinity;
+  for(const k of ["S","M","F"]){ const d=Math.abs(v-table[k]); if(d<bd){bd=d;best=k;} }
+  return best;
+}
+function nearestSpanLetter(span){
+  let best="M", bd=Infinity;
+  for(const k of ["S","M","L"]){ const d=Math.abs(span-CFG.SLIDER_SPANS[k]); if(d<bd){bd=d;best=k;} }
+  return best;
+}
+
+/* =====================================================================
+   Lua export (house style of levels.lua)
+   ===================================================================== */
+function fmtNum(n){
+  if (typeof n !== "number" || !isFinite(n)) return String(n);
+  if (Number.isInteger(n)) return String(n);
+  let s = n.toFixed(4).replace(/0+$/,"").replace(/\.$/,"");
+  return s;
+}
+function fmtPos01(n){ // objectPosition: always show a decimal (0.0, 0.3, 1.0)
+  const s = fmtNum(n);
+  return s.includes(".") ? s : s + ".0";
+}
+function luaStr(s){ return '"' + String(s).replace(/\\/g,"\\\\").replace(/"/g,'\\"') + '"'; }
+
+/* which params go on line 1 vs the continuation line */
+const EXPORT_SPEC = {
+  spawn:        {l1:["x","y"], l2:[]},
+  exit:         {l1:["x","y"], l2:[]},
+  coin:         {l1:["x","y"], l2:[]},
+  hazard:       {l1:["x","y","radius"], l2:[]},
+  wall:         {l1:["x","y","length","angle"], l2:[]},
+  deflector:    {l1:["x","y","length","angle"], l2:[]},
+  launcher:     {l1:["x","y","angle"], l2:[]},
+  sweeper:      {l1:["x","y","length","angle"], l2:["minAngle","maxAngle","speed"]},
+  toggle_wall:  {l1:["x","y","length","angle"], l2:["angleStep","speed"]},
+  sliding_wall: {l1:["x","y","length","angle"], l2:["slideAngle","slideRange","objectPosition"]},
+  moving_wall:  {l1:["x","y","length","angle"], l2:["slideAngle","slideRange","objectPosition","speed"]},
+  moving_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","speed"]},
+};
+function fmtParam(key, val){
+  if (key === "objectPosition") return key + " = " + fmtPos01(val);
+  if (typeof val === "string") return key + " = " + luaStr(val);
+  if (typeof val === "boolean") return key + " = " + (val ? "true" : "false");
+  return key + " = " + fmtNum(val);
+}
+
+function exportLevel(level){
+  const objs = level.objects;
+  const specs = objs.map(o => EXPORT_SPEC[o.type] || {l1:["x","y"],l2:[]});
+  const typeF = objs.map(o => luaStr(o.type) + ",");
+  const typeW = Math.max(0, ...typeF.map(s=>s.length));
+  const xVals = objs.map(o => fmtNum(o.x));
+  const xW = Math.max(0, ...xVals.map(s=>s.length));
+  const yVals = objs.map(o => fmtNum(o.y));
+  const yW = Math.max(0, ...yVals.map(s=>s.length));
+
+  const lines = [];
+  let head = `  { name = ${luaStr(level.name||"Untitled")}, theme = ${luaStr(level.theme||"Roll")}, ceiling = ${luaStr(level.ceiling||"solid")},`;
+  if (level.tutorial && String(level.tutorial).trim() !== ""){
+    lines.push(head);
+    lines.push(`    tutorial = ${luaStr(level.tutorial)}, objects = {`);
+  } else {
+    lines.push(head + " objects = {");
+  }
+
+  objs.forEach((o,i)=>{
+    const spec = specs[i];
+    const extras = o._extra ? Object.keys(o._extra) : [];
+    const l2keys = spec.l2.filter(k => o[k] !== undefined);
+    const hasL2 = l2keys.length > 0 || (extras.length > 0 && spec.l2.length > 0);
+
+    let line = "    { type = " + typeF[i].padEnd(typeW) + " ";
+    const parts = [];
+    for (const k of spec.l1){
+      if (o[k] === undefined) continue;
+      if (k === "x"){
+        parts.push("x = " + (xVals[i]+",").padEnd(xW+1));
+      } else if (k === "y"){
+        const more = spec.l1.indexOf("y") < spec.l1.length-1 || hasL2 || extras.length>0;
+        parts.push("y = " + (more ? (yVals[i]+",").padEnd(yW+1) : yVals[i]+","));
+      } else {
+        parts.push(fmtParam(k,o[k]) + ",");
+      }
+    }
+    // extras go at the end of whichever line is last
+    const extraParts = extras.map(k => fmtParam(k, o._extra[k]) + ",");
+    if (!hasL2){
+      for (const ep of extraParts) parts.push(ep);
+      line += parts.join(" ");
+      line = line.replace(/,\s*$/,"") + " },";
+      lines.push(line);
+    } else {
+      line += parts.join(" ");
+      lines.push(line.replace(/\s+$/,""));
+      let cont = "      " + l2keys.map(k=>fmtParam(k,o[k]) + ",").concat(extraParts).join(" ");
+      cont = cont.replace(/,\s*$/,"") + " },";
+      lines.push(cont);
+    }
+  });
+  lines.push("  }},");
+  return lines.join("\n");
+}
+
+/* =====================================================================
+   Lua import — tolerant tokenizer/parser for the restricted table subset
+   ===================================================================== */
+function parseLuaText(src){
+  let i = 0;
+  const n = src.length;
+  function err(msg){ throw new Error("Parse error at char "+i+": "+msg); }
+  function skip(){
+    for(;;){
+      while (i<n && /\s/.test(src[i])) i++;
+      if (src[i]==="-" && src[i+1]==="-"){ while(i<n && src[i]!=="\n") i++; continue; }
+      break;
+    }
+  }
+  function parseString(){
+    const q = src[i]; i++;
+    let out = "";
+    while(i<n){
+      const c = src[i];
+      if (c === "\\"){ 
+        const nx = src[i+1];
+        if (nx === "n") out += "\n";
+        else if (nx === "t") out += "\t";
+        else out += nx;
+        i += 2; continue;
+      }
+      if (c === q){ i++; return out; }
+      out += c; i++;
+    }
+    err("unterminated string");
+  }
+  function parseNumber(){
+    const m = /^[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?/.exec(src.slice(i));
+    if (!m) err("bad number");
+    i += m[0].length;
+    return parseFloat(m[0]);
+  }
+  function takeIdent(){
+    const m = /^[A-Za-z_][A-Za-z0-9_]*/.exec(src.slice(i));
+    if (!m) return null;
+    i += m[0].length;
+    return m[0];
+  }
+  function takeValue(){
+    skip();
+    const c = src[i];
+    if (c === "{") return parseTable();
+    if (c === '"' || c === "'") return parseString();
+    if (c === "-" || c === "+" || /[0-9.]/.test(c)) return parseNumber();
+    const id = takeIdent();
+    if (id === "true") return true;
+    if (id === "false") return false;
+    if (id === "nil") return null;
+    if (id) err("unexpected identifier '"+id+"'");
+    err("unexpected character '"+c+"'");
+  }
+  function parseTable(){
+    skip();
+    if (src[i] !== "{") err("expected '{'");
+    i++;
+    const map = {}, arr = [];
+    for(;;){
+      skip();
+      if (i>=n) err("unterminated table");
+      if (src[i] === "}"){ i++; break; }
+      // key = value ?
+      const save = i;
+      const id = takeIdent();
+      if (id){
+        skip();
+        if (src[i] === "="){
+          i++;
+          map[id] = takeValue();
+        } else {
+          // bare identifier value (true/false/nil) as array item
+          i = save;
+          arr.push(takeValue());
+        }
+      } else if (src[i] === "["){
+        // [key] = value — accept numeric/string bracket keys
+        i++;
+        const k = takeValue();
+        skip();
+        if (src[i] !== "]") err("expected ']'");
+        i++; skip();
+        if (src[i] !== "=") err("expected '='");
+        i++;
+        map[String(k)] = takeValue();
+      } else {
+        arr.push(takeValue());
+      }
+      skip();
+      if (src[i] === "," || src[i] === ";"){ i++; continue; }
+      skip();
+      if (src[i] === "}"){ i++; break; }
+      err("expected ',' or '}'");
+    }
+    return {__table:true, map, arr};
+  }
+  // find first '{'
+  skip();
+  while (i<n && src[i] !== "{"){
+    if (src[i]==="-" && src[i+1]==="-"){ while(i<n && src[i]!=="\n") i++; }
+    else i++;
+    skip();
+  }
+  if (i>=n) throw new Error("No Lua table found in the pasted text.");
+  return parseTable();
+}
+
+const NUMERIC_KEYS = new Set(["x","y","length","angle","radius","minAngle","maxAngle","angleStep","slideAngle","objectPosition","slidePosition","minSlide","maxSlide","slideOffset","maxOpen"]);
+const KNOWN_KEYS = {
+  spawn:["x","y"], exit:["x","y"], coin:["x","y"],
+  hazard:["x","y","radius"],
+  wall:["x","y","length","angle"],
+  deflector:["x","y","length","angle"],
+  launcher:["x","y","angle"],
+  sweeper:["x","y","length","angle","minAngle","maxAngle","speed"],
+  toggle_wall:["x","y","length","angle","angleStep","speed"],
+  sliding_wall:["x","y","length","angle","slideAngle","slideRange","objectPosition"],
+  moving_wall:["x","y","length","angle","slideAngle","slideRange","objectPosition","speed"],
+  moving_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","speed"],
+};
+
+function importLevelFromLua(text){
+  const t = parseLuaText(text);
+  let lt = t;
+  const notes = [];
+  if (!lt.map.objects){
+    // maybe the whole levels list was pasted — take the first level entry
+    const cand = lt.arr.find(v => v && v.__table && v.map.objects);
+    if (cand){ lt = cand; notes.push("Pasted text contained multiple levels — imported the first one."); }
+    else throw new Error("Table has no 'objects' field — paste a single level entry.");
+  }
+  const level = {
+    name: typeof lt.map.name === "string" ? lt.map.name : "Untitled",
+    theme: typeof lt.map.theme === "string" ? lt.map.theme : "Roll",
+    ceiling: (lt.map.ceiling === "open" || lt.map.ceiling === "spikes") ? lt.map.ceiling : "solid",
+    tutorial: typeof lt.map.tutorial === "string" ? lt.map.tutorial : "",
+    objects: [],
+  };
+  const objsT = lt.map.objects;
+  if (!objsT || !objsT.__table) throw new Error("'objects' is not a table.");
+  for (const item of objsT.arr){
+    if (!item || !item.__table){ notes.push("Skipped a non-table entry in objects."); continue; }
+    const m = item.map;
+    const type = m.type;
+    if (typeof type !== "string" || !EXPORT_SPEC[type]){
+      notes.push("Skipped unsupported object type: " + JSON.stringify(type));
+      continue;
+    }
+    const o = {type};
+    const known = new Set(KNOWN_KEYS[type]);
+    for (const [k,v] of Object.entries(m)){
+      if (k === "type") continue;
+      let val = v;
+      if (val && val.__table){ notes.push("Dropped nested table param '"+k+"' on "+type+"."); continue; }
+      if (NUMERIC_KEYS.has(k) && typeof val === "string") val = parseFloat(val);
+      if (known.has(k)) o[k] = val;
+      else { (o._extra = o._extra || {})[k] = val; }
+    }
+    // legacy conversions (mirrors applySlideRailConfig / resolveMotionSpeed)
+    if (SLIDE_TYPES.has(type)){
+      if (o.slideRange === undefined){
+        const ex = o._extra || {};
+        if (ex.minSlide !== undefined || ex.maxSlide !== undefined){
+          const mn = ex.minSlide !== undefined ? ex.minSlide : -CFG.SLIDER_SPANS.M;
+          const mx = ex.maxSlide !== undefined ? ex.maxSlide : CFG.SLIDER_SPANS.M;
+          o.slideRange = nearestSpanLetter(Math.max(Math.abs(mn),Math.abs(mx)));
+          delete ex.minSlide; delete ex.maxSlide;
+          notes.push(type+": converted legacy minSlide/maxSlide to slideRange \""+o.slideRange+"\".");
+        } else o.slideRange = "M";
+      }
+      if (o.objectPosition === undefined){
+        const ex = o._extra || {};
+        if (ex.slidePosition !== undefined){ o.objectPosition = ex.slidePosition; delete ex.slidePosition; }
+        else o.objectPosition = 0.5;
+      }
+      o.objectPosition = Math.max(0, Math.min(1, o.objectPosition));
+      if (o.slideAngle === undefined) o.slideAngle = 0;
+    }
+    if ("speed" in o && typeof o.speed === "number"){
+      const tbl = (type === "sweeper") ? CFG.SWEEPER_SPEEDS
+                : (type === "toggle_wall") ? CFG.TOGGLE_INTERVALS
+                : CFG.MOVING_SPEEDS;
+      o.speed = nearestSpeedLetter(o.speed, tbl);
+      notes.push(type+": numeric speed snapped to \""+o.speed+"\".");
+    }
+    if (o._extra && Object.keys(o._extra).length === 0) delete o._extra;
+    // fill required defaults (same as game constructors)
+    const d = newObject(type, o.x ?? 0, o.y ?? 0);
+    for (const [k,v] of Object.entries(d)) if (o[k] === undefined) o[k] = v;
+    level.objects.push(o);
+  }
+  return {level, notes};
+}
+
+/* ---------- built-in level library (verbatim from levels.lua) ---------- */
+const BUILTIN_LEVELS = [{"n":1,"name":"First Roll","theme":"Roll","lua":"{ name = \"First Roll\", theme = \"Roll\", ceiling = \"solid\",\n    tutorial = \"Crank to roll CLING along the walls. Reach the EXIT.\", objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"coin\",  x = 0,    y = -100 },\n    { type = \"coin\",  x = 180,  y = 0 },\n    { type = \"coin\",  x = 0,    y = 100 },\n    { type = \"exit\",  x = -180, y = 60 },\n  }}"},{"n":2,"name":"Drop In","theme":"Roll","lua":"{ name = \"Drop In\", theme = \"Roll\", ceiling = \"solid\",\n    tutorial = \"Down = DROP. Fall and land on flat tops.\", objects = {\n    { type = \"spawn\",  x = 0,    y = 100 },\n    { type = \"wall\",   x = 0,    y = 40,  length = 100, angle = 0 },\n    { type = \"wall\",   x = 0,    y = -30, length = 100, angle = 0 },\n    { type = \"hazard\", x = -180, y = 0,   radius = 14 },\n    { type = \"hazard\", x = 180,  y = 0,   radius = 14 },\n    { type = \"coin\",   x = 0,    y = 72 },\n    { type = \"coin\",   x = 30,   y = -30 },\n    { type = \"coin\",   x = 120,  y = -100 },\n    { type = \"exit\",   x = 180,  y = -100 },\n  }}"},{"n":3,"name":"Ledge Line","theme":"Roll","lua":"{ name = \"Ledge Line\", theme = \"Roll\", ceiling = \"solid\", objects = {\n    { type = \"spawn\",  x = -160, y = -100 },\n    { type = \"wall\",   x = -120, y = -40, length = 120, angle = 0 },\n    { type = \"hazard\", x = -100, y = -100, radius = 16 },\n    { type = \"hazard\", x = -180, y = 40,  radius = 14 },\n    { type = \"coin\",   x = -100, y = -40 },\n    { type = \"coin\",   x = -60,  y = -70 },\n    { type = \"coin\",   x = 180,  y = 60 },\n    { type = \"exit\",   x = 180,  y = -100 },\n  }}"},{"n":4,"name":"Stepping Down","theme":"Roll","lua":"{ name = \"Stepping Down\", theme = \"Roll\", ceiling = \"solid\", objects = {\n    { type = \"spawn\",  x = 0,    y = 100 },\n    { type = \"wall\",   x = 110,  y = 50,  length = 140, angle = 0 },\n    { type = \"wall\",   x = 90,   y = -50, length = 140, angle = 0 },\n    { type = \"hazard\", x = 180,  y = 0,   radius = 14 },\n    { type = \"hazard\", x = -180, y = 0,   radius = 14 },\n    { type = \"coin\",   x = 100,  y = 50 },\n    { type = \"coin\",   x = 40,   y = 0 },\n    { type = \"coin\",   x = 90,   y = -50 },\n    { type = \"exit\",   x = 180,  y = -100 },\n  }}"},{"n":5,"name":"Teeth","theme":"Roll","lua":"{ name = \"Teeth\", theme = \"Roll\", ceiling = \"spikes\",\n    tutorial = \"Spiked ceilings kill on touch. Stay low.\", objects = {\n    { type = \"spawn\",  x = -160, y = -100 },\n    { type = \"wall\",   x = -130, y = 20,  length = 100, angle = 0 },\n    { type = \"wall\",   x = 0,    y = -30, length = 180, angle = 0 },\n    { type = \"hazard\", x = 0,    y = -100, radius = 18 },\n    { type = \"coin\",   x = 0,    y = -30 },\n    { type = \"coin\",   x = -80,  y = -5 },\n    { type = \"coin\",   x = -180, y = 70 },\n    { type = \"exit\",   x = 180,  y = -100 },\n  }}"},{"n":6,"name":"Ferry","theme":"Clockwork","lua":"{ name = \"Ferry\", theme = \"Clockwork\", ceiling = \"spikes\",\n    tutorial = \"Some platforms move on their own. Drop on and ride.\", objects = {\n    { type = \"spawn\",       x = -160, y = -100 },\n    { type = \"wall\",        x = -150, y = 0,   length = 60, angle = 0 },\n    { type = \"moving_wall\", x = 0,    y = -40, length = 80, angle = 0,\n      slideAngle = 0, slideRange = \"L\", objectPosition = 0.0, speed = \"S\" },\n    { type = \"hazard\",      x = 0,    y = -100, radius = 18 },\n    { type = \"hazard\",      x = -180, y = 50,  radius = 12 },\n    { type = \"coin\",        x = 0,    y = -40 },\n    { type = \"coin\",        x = -120, y = -20 },\n    { type = \"coin\",        x = 120,  y = -70 },\n    { type = \"exit\",        x = 180,  y = -100 },\n  }}"},{"n":7,"name":"Swing By","theme":"Clockwork","lua":"{ name = \"Swing By\", theme = \"Clockwork\", ceiling = \"spikes\",\n    tutorial = \"Board the sweeper's tip when it dips low.\", objects = {\n    { type = \"spawn\",   x = -160, y = -100 },\n    { type = \"sweeper\", x = -40,  y = -40, length = 120, angle = 0,\n      minAngle = -50, maxAngle = 50, speed = \"S\" },\n    { type = \"wall\",    x = 65,   y = 5,   length = 120, angle = 0 },\n    { type = \"hazard\",  x = 60,   y = -100, radius = 16 },\n    { type = \"hazard\",  x = -180, y = 30,  radius = 12 },\n    { type = \"coin\",    x = -40,  y = -40 },\n    { type = \"coin\",    x = 65,   y = 5 },\n    { type = \"coin\",    x = 125,  y = -50 },\n    { type = \"exit\",    x = 180,  y = -100 },\n  }}"},{"n":8,"name":"Patrol","theme":"Clockwork","lua":"{ name = \"Patrol\", theme = \"Clockwork\", ceiling = \"solid\",\n    tutorial = \"Wait. Watch the pattern. Then go.\", objects = {\n    { type = \"spawn\",         x = -160, y = -100 },\n    { type = \"moving_hazard\", x = 0,    y = -92, radius = 12,\n      slideAngle = 0, slideRange = \"L\", objectPosition = 0.5, speed = \"M\" },\n    { type = \"hazard\",        x = -180, y = 0,   radius = 14 },\n    { type = \"hazard\",        x = 180,  y = 60,  radius = 12 },\n    { type = \"coin\",          x = 0,    y = -100 },\n    { type = \"coin\",          x = 90,   y = -100 },\n    { type = \"coin\",          x = 180,  y = 20 },\n    { type = \"exit\",          x = 180,  y = -100 },\n  }}"},{"n":9,"name":"Detent","theme":"Clockwork","lua":"{ name = \"Detent\", theme = \"Clockwork\", ceiling = \"open\",\n    tutorial = \"This wall snaps on a timer. Ride the snap upward.\", objects = {\n    { type = \"spawn\",       x = -160, y = -100 },\n    { type = \"toggle_wall\", x = -130, y = -40, length = 100, angle = 0,\n      angleStep = 90, speed = \"M\" },\n    { type = \"wall\",        x = -60,  y = 10,  length = 120, angle = 0 },\n    { type = \"hazard\",      x = -50,  y = -100, radius = 16 },\n    { type = \"coin\",        x = -130, y = -40 },\n    { type = \"coin\",        x = -60,  y = 10 },\n    { type = \"coin\",        x = 0,    y = -45 },\n    { type = \"exit\",        x = 180,  y = -100 },\n  }}"},{"n":10,"name":"Clock Tower","theme":"Clockwork","lua":"{ name = \"Clock Tower\", theme = \"Clockwork\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",         x = -160, y = -100 },\n    { type = \"sweeper\",       x = -20,  y = -40, length = 120, angle = 0,\n      minAngle = -50, maxAngle = 50, speed = \"M\" },\n    { type = \"wall\",          x = 85,   y = 5,   length = 120, angle = 0 },\n    { type = \"moving_hazard\", x = 170,  y = -20, radius = 10,\n      slideAngle = 90, slideRange = \"M\", objectPosition = 0.0, speed = \"M\" },\n    { type = \"hazard\",        x = 40,   y = -100, radius = 16 },\n    { type = \"coin\",          x = -20,  y = -40 },\n    { type = \"coin\",          x = 85,   y = 5 },\n    { type = \"coin\",          x = 180,  y = -20 },\n    { type = \"exit\",          x = 180,  y = 80 },\n  }}"},{"n":11,"name":"First Reach","theme":"Pivot","lua":"{ name = \"First Reach\", theme = \"Pivot\", ceiling = \"solid\",\n    tutorial = \"Left/Right selects a BAR. The crank turns it.\", objects = {\n    { type = \"spawn\",     x = -60,  y = -100 },\n    { type = \"deflector\", x = -125, y = 0,   length = 110, angle = 180 },\n    { type = \"deflector\", x = -40,  y = 60,  length = 110, angle = 0 },\n    { type = \"hazard\",    x = 50,   y = -100, radius = 16 },\n    { type = \"hazard\",    x = -180, y = 60,   radius = 16 },\n    { type = \"coin\",      x = 100,  y = 100 },\n    { type = \"coin\",      x = -125, y = 57 },\n    { type = \"coin\",      x = -1,   y = 21 },\n    { type = \"exit\",      x = 180,  y = 100 },\n  }}"},{"n":12,"name":"Tip Meet","theme":"Pivot","lua":"{ name = \"Tip Meet\", theme = \"Pivot\", ceiling = \"solid\",\n    tutorial = \"Rotate bars until tips kiss, then transfer.\", objects = {\n    { type = \"spawn\",     x = -100, y = -100 },\n    { type = \"deflector\", x = -70,  y = -40, length = 120, angle = 90 },\n    { type = \"deflector\", x = 40,   y = 0,   length = 120, angle = 270 },\n    { type = \"hazard\",    x = 20,   y = -100, radius = 16 },\n    { type = \"hazard\",    x = -180, y = 0,   radius = 14 },\n    { type = \"coin\",      x = -70,  y = 20 },\n    { type = \"coin\",      x = -10,  y = -10 },\n    { type = \"coin\",      x = 40,   y = 40 },\n    { type = \"exit\",      x = 180,  y = -100 },\n  }}"},{"n":13,"name":"Carousel","theme":"Pivot","lua":"{ name = \"Carousel\", theme = \"Pivot\", ceiling = \"solid\",\n    tutorial = \"Stay clinging while the bar turns. It carries you.\", objects = {\n    { type = \"spawn\",     x = -160, y = -100 },\n    { type = \"deflector\", x = -100, y = -45, length = 110, angle = 90 },\n    { type = \"hazard\",    x = -70,  y = -100, radius = 16 },\n    { type = \"hazard\",    x = -180, y = 30,  radius = 12 },\n    { type = \"coin\",      x = -100, y = -45 },\n    { type = \"coin\",      x = -100, y = 26 },\n    { type = \"coin\",      x = -37,  y = -70 },\n    { type = \"exit\",      x = 180,  y = -100 },\n  }}"},{"n":14,"name":"Triple Shelf","theme":"Pivot","lua":"{ name = \"Triple Shelf\", theme = \"Pivot\", ceiling = \"solid\", objects = {\n    { type = \"spawn\",     x = -160, y = -100 },\n    { type = \"deflector\", x = -80,  y = -50, length = 90, angle = 0 },\n    { type = \"deflector\", x = 0,    y = 0,   length = 90, angle = 0 },\n    { type = \"deflector\", x = 80,   y = 50,  length = 90, angle = 0 },\n    { type = \"hazard\",    x = 0,    y = -100, radius = 14 },\n    { type = \"hazard\",    x = -180, y = 20,  radius = 12 },\n    { type = \"coin\",      x = -80,  y = -34 },\n    { type = \"coin\",      x = 0,    y = 16 },\n    { type = \"coin\",      x = 80,   y = 66 },\n    { type = \"exit\",      x = 180,  y = 60 },\n  }}"},{"n":15,"name":"Ferris","theme":"Pivot","lua":"{ name = \"Ferris\", theme = \"Pivot\", ceiling = \"solid\", objects = {\n    { type = \"spawn\",     x = -160, y = -100 },\n    { type = \"deflector\", x = 0,    y = -30, length = 120, angle = 90 },\n    { type = \"wall\",      x = 90,   y = 38,  length = 120, angle = 0 },\n    { type = \"hazard\",    x = 90,   y = -100, radius = 16 },\n    { type = \"hazard\",    x = -180, y = 30,  radius = 12 },\n    { type = \"coin\",      x = 0,    y = -30 },\n    { type = \"coin\",      x = 90,   y = 38 },\n    { type = \"coin\",      x = 0,    y = 44 },\n    { type = \"exit\",      x = 180,  y = -100 },\n  }}"},{"n":16,"name":"Machine Floor","theme":"Pivot","lua":"{ name = \"Machine Floor\", theme = \"Pivot\", ceiling = \"solid\", objects = {\n    { type = \"spawn\",     x = -160, y = -100 },\n    { type = \"deflector\", x = -100, y = -45, length = 110, angle = 90 },\n    { type = \"deflector\", x = 0,    y = 25,  length = 110, angle = 0 },\n    { type = \"hazard\",    x = -40,  y = -100, radius = 16 },\n    { type = \"hazard\",    x = -180, y = 40,  radius = 12 },\n    { type = \"hazard\",    x = 60,   y = 60,  radius = 14 },\n    { type = \"coin\",      x = -100, y = 26 },\n    { type = \"coin\",      x = 0,    y = 41 },\n    { type = \"coin\",      x = 63,   y = -40 },\n    { type = \"exit\",      x = 180,  y = -100 },\n  }}"},{"n":17,"name":"Lift","theme":"Slide","lua":"{ name = \"Lift\", theme = \"Slide\", ceiling = \"open\",\n    tutorial = \"Select the SLIDER. The crank moves it along its track.\", objects = {\n    { type = \"spawn\",        x = -160, y = -100 },\n    { type = \"sliding_wall\", x = 140,  y = -20, length = 80, angle = 0,\n      slideAngle = 90, slideRange = \"M\", objectPosition = 0.0 },\n    { type = \"hazard\",       x = 180,  y = -20, radius = 12 },\n    { type = \"coin\",         x = 140,  y = -20 },\n    { type = \"coin\",         x = 60,   y = -100 },\n    { type = \"coin\",         x = 180,  y = 70 },\n    { type = \"exit\",         x = 180,  y = 100 },\n  }}"},{"n":18,"name":"Reach Across","theme":"Slide","lua":"{ name = \"Reach Across\", theme = \"Slide\", ceiling = \"open\", objects = {\n    { type = \"spawn\",        x = -160, y = -100 },\n    { type = \"sliding_wall\", x = -50,  y = 0,   length = 80, angle = 0,\n      slideAngle = 0, slideRange = \"L\", objectPosition = 0.0 },\n    { type = \"wall\",         x = 80,   y = 0,   length = 70, angle = 0 },\n    { type = \"hazard\",       x = 0,    y = -100, radius = 14 },\n    { type = \"hazard\",       x = -180, y = 40,  radius = 12 },\n    { type = \"coin\",         x = -20,  y = 16 },\n    { type = \"coin\",         x = 80,   y = 0 },\n    { type = \"coin\",         x = 115,  y = -50 },\n    { type = \"exit\",         x = 180,  y = -100 },\n  }}"},{"n":19,"name":"Handoff","theme":"Slide","lua":"{ name = \"Handoff\", theme = \"Slide\", ceiling = \"open\", objects = {\n    { type = \"spawn\",        x = -160, y = -100 },\n    { type = \"sliding_wall\", x = -60,  y = -30, length = 90, angle = 0,\n      slideAngle = 90, slideRange = \"M\", objectPosition = 0.0 },\n    { type = \"sliding_wall\", x = 80,   y = 44,  length = 90, angle = 0,\n      slideAngle = 0, slideRange = \"L\", objectPosition = 0.0 },\n    { type = \"hazard\",       x = 40,   y = -100, radius = 16 },\n    { type = \"hazard\",       x = 180,  y = -20, radius = 12 },\n    { type = \"coin\",         x = -60,  y = -30 },\n    { type = \"coin\",         x = -10,  y = 52 },\n    { type = \"coin\",         x = 180,  y = 40 },\n    { type = \"exit\",         x = 180,  y = 100 },\n  }}"},{"n":20,"name":"Ratchet","theme":"Slide","lua":"{ name = \"Ratchet\", theme = \"Slide\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",        x = -160, y = -100 },\n    { type = \"sliding_wall\", x = -140, y = -20, length = 80, angle = 0,\n      slideAngle = 90, slideRange = \"M\", objectPosition = 0.0 },\n    { type = \"deflector\",    x = -10,  y = 55,  length = 110, angle = 0 },\n    { type = \"hazard\",       x = -60,  y = -100, radius = 16 },\n    { type = \"hazard\",       x = -180, y = 60,  radius = 12 },\n    { type = \"coin\",         x = -140, y = -20 },\n    { type = \"coin\",         x = -10,  y = 71 },\n    { type = \"coin\",         x = 53,   y = -40 },\n    { type = \"exit\",         x = 180,  y = -100 },\n  }}"},{"n":21,"name":"Pivot and Slide","theme":"Slide","lua":"{ name = \"Pivot and Slide\", theme = \"Slide\", ceiling = \"solid\", objects = {\n    { type = \"spawn\",        x = -160, y = -100 },\n    { type = \"deflector\",    x = -60,  y = -35, length = 110, angle = 90 },\n    { type = \"sliding_wall\", x = 60,   y = 30,  length = 90, angle = 0,\n      slideAngle = 90, slideRange = \"M\", objectPosition = 0.5 },\n    { type = \"hazard\",       x = 20,   y = -100, radius = 16 },\n    { type = \"hazard\",       x = -180, y = 30,  radius = 12 },\n    { type = \"coin\",         x = -60,  y = 26 },\n    { type = \"coin\",         x = 60,   y = 30 },\n    { type = \"coin\",         x = 120,  y = 100 },\n    { type = \"exit\",         x = 180,  y = 100 },\n  }}"},{"n":22,"name":"Load","theme":"Launch","lua":"{ name = \"Load\", theme = \"Launch\", ceiling = \"spikes\",\n    tutorial = \"Roll into the launcher. Crank aims. Up = FIRE.\", objects = {\n    { type = \"spawn\",    x = -160, y = -100 },\n    { type = \"launcher\", x = -155, y = -78,  angle = 90 },\n    { type = \"hazard\",   x = 0,    y = -40,  radius = 16 },\n    { type = \"coin\",     x = -100, y = -100 },\n    { type = \"coin\",     x = 100,  y = 40 },\n    { type = \"coin\",     x = 160,  y = 100 },\n    { type = \"exit\",     x = 180,  y = -100 },\n  }}"},{"n":23,"name":"Soft Catch","theme":"Launch","lua":"{ name = \"Soft Catch\", theme = \"Launch\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",     x = -160, y = -100 },\n    { type = \"launcher\",  x = -155, y = -78, angle = 90 },\n    { type = \"deflector\", x = 40,   y = 20,  length = 120, angle = 0 },\n    { type = \"hazard\",    x = 0,    y = -100, radius = 14 },\n    { type = \"coin\",      x = 40,   y = 36 },\n    { type = \"coin\",      x = 100,  y = 36 },\n    { type = \"coin\",      x = 160,  y = -100 },\n    { type = \"exit\",      x = 180,  y = -100 },\n  }}"},{"n":24,"name":"Bank Shot","theme":"Launch","lua":"{ name = \"Bank Shot\", theme = \"Launch\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",     x = -160, y = 0 },\n    { type = \"launcher\",  x = -155, y = 20,  angle = 180 },\n    { type = \"deflector\", x = 90,   y = -20, length = 100, angle = 90 },\n    { type = \"hazard\",    x = 0,    y = 20,  radius = 18 },\n    { type = \"hazard\",    x = 40,   y = -60, radius = 14 },\n    { type = \"coin\",      x = 90,   y = 40 },\n    { type = \"coin\",      x = 90,   y = -70 },\n    { type = \"coin\",      x = 160,  y = 100 },\n    { type = \"exit\",      x = 180,  y = -100 },\n  }}"},{"n":25,"name":"Twin Tubes","theme":"Launch","lua":"{ name = \"Twin Tubes\", theme = \"Launch\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",    x = -160, y = -100 },\n    { type = \"launcher\", x = -155, y = -78, angle = 90 },\n    { type = \"launcher\", x = 155,  y = 50,  angle = 0 },\n    { type = \"hazard\",   x = 0,    y = 0,   radius = 16 },\n    { type = \"coin\",     x = -40,  y = 80 },\n    { type = \"coin\",     x = 100,  y = -40 },\n    { type = \"coin\",     x = 160,  y = -100 },\n    { type = \"exit\",     x = 180,  y = -100 },\n  }}"},{"n":26,"name":"Over the Blade","theme":"Launch","lua":"{ name = \"Over the Blade\", theme = \"Launch\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",     x = -160, y = -100 },\n    { type = \"launcher\",  x = -155, y = -78, angle = 90 },\n    { type = \"deflector\", x = 110,  y = 50,  length = 100, angle = 0 },\n    { type = \"hazard\",    x = -20,  y = 10,  radius = 16 },\n    { type = \"hazard\",    x = 40,   y = -20, radius = 16 },\n    { type = \"hazard\",    x = 20,   y = 60,  radius = 14 },\n    { type = \"coin\",      x = 110,  y = 66 },\n    { type = \"coin\",      x = 60,   y = 66 },\n    { type = \"coin\",      x = 160,  y = -100 },\n    { type = \"exit\",      x = 180,  y = -100 },\n  }}"},{"n":27,"name":"Two Beats","theme":"Remix","lua":"{ name = \"Two Beats\", theme = \"Remix\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",     x = -160, y = -100 },\n    { type = \"sweeper\",   x = -40,  y = -40, length = 120, angle = 0,\n      minAngle = -50, maxAngle = 50, speed = \"M\" },\n    { type = \"deflector\", x = 60,   y = 0,   length = 90, angle = 0 },\n    { type = \"hazard\",    x = 30,   y = -100, radius = 16 },\n    { type = \"hazard\",    x = -180, y = 30,  radius = 12 },\n    { type = \"coin\",      x = -40,  y = -40 },\n    { type = \"coin\",      x = 60,   y = 16 },\n    { type = \"coin\",      x = 60,   y = -53 },\n    { type = \"exit\",      x = 180,  y = -100 },\n  }}"},{"n":28,"name":"Crossfire","theme":"Remix","lua":"{ name = \"Crossfire\", theme = \"Remix\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",         x = -160, y = -100 },\n    { type = \"launcher\",      x = -155, y = -78, angle = 90 },\n    { type = \"sliding_wall\",  x = 80,   y = 30,  length = 90, angle = 0,\n      slideAngle = 90, slideRange = \"M\", objectPosition = 0.5 },\n    { type = \"moving_hazard\", x = 20,   y = 0,   radius = 12,\n      slideAngle = 90, slideRange = \"S\", objectPosition = 0.5, speed = \"M\" },\n    { type = \"hazard\",        x = -20,  y = -100, radius = 16 },\n    { type = \"hazard\",        x = -180, y = 20,  radius = 12 },\n    { type = \"coin\",          x = 80,   y = 46 },\n    { type = \"coin\",          x = 20,   y = 60 },\n    { type = \"coin\",          x = 140,  y = -100 },\n    { type = \"exit\",          x = 180,  y = -100 },\n  }}"},{"n":29,"name":"Snap and Sprint","theme":"Remix","lua":"{ name = \"Snap and Sprint\", theme = \"Remix\", ceiling = \"open\", objects = {\n    { type = \"spawn\",         x = -160, y = -100 },\n    { type = \"toggle_wall\",   x = -130, y = -40, length = 100, angle = 0,\n      angleStep = 90, speed = \"M\" },\n    { type = \"wall\",          x = -60,  y = 10,  length = 120, angle = 0 },\n    { type = \"moving_hazard\", x = 100,  y = -92, radius = 10,\n      slideAngle = 0, slideRange = \"S\", objectPosition = 0.5, speed = \"M\" },\n    { type = \"hazard\",        x = -50,  y = -100, radius = 16 },\n    { type = \"coin\",          x = -130, y = -40 },\n    { type = \"coin\",          x = -60,  y = 10 },\n    { type = \"coin\",          x = 100,  y = -100 },\n    { type = \"exit\",          x = 180,  y = -100 },\n  }}"},{"n":30,"name":"Pinwheel Climb","theme":"Remix","lua":"{ name = \"Pinwheel Climb\", theme = \"Remix\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",         x = -160, y = -100 },\n    { type = \"deflector\",     x = -100, y = -45, length = 110, angle = 90 },\n    { type = \"deflector\",     x = -10,  y = 15,  length = 110, angle = 0 },\n    { type = \"moving_hazard\", x = 120,  y = -92, radius = 10,\n      slideAngle = 0, slideRange = \"S\", objectPosition = 0.5, speed = \"M\" },\n    { type = \"hazard\",        x = 0,    y = -100, radius = 18 },\n    { type = \"hazard\",        x = -180, y = 20,  radius = 12 },\n    { type = \"coin\",          x = -100, y = -45 },\n    { type = \"coin\",          x = -10,  y = 31 },\n    { type = \"coin\",          x = 120,  y = -100 },\n    { type = \"exit\",          x = 180,  y = -100 },\n  }}"},{"n":31,"name":"Snap Bridge","theme":"Remix","lua":"{ name = \"Snap Bridge\", theme = \"Remix\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",       x = 150,  y = -100 },\n    { type = \"toggle_wall\", x = 130,  y = -40, length = 100, angle = 0,\n      angleStep = 90, speed = \"M\" },\n    { type = \"deflector\",   x = 60,   y = 10,  length = 110, angle = 0 },\n    { type = \"wall\",        x = 0,    y = 55,  length = 140, angle = 0 },\n    { type = \"hazard\",      x = 0,    y = -100, radius = 18 },\n    { type = \"hazard\",      x = 180,  y = 10,  radius = 12 },\n    { type = \"coin\",        x = 130,  y = -20 },\n    { type = \"coin\",        x = 60,   y = 26 },\n    { type = \"coin\",        x = -70,  y = 20 },\n    { type = \"exit\",        x = -180, y = 60 },\n  }}"},{"n":32,"name":"Launch Window","theme":"Remix","lua":"{ name = \"Launch Window\", theme = \"Remix\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",    x = -160, y = -100 },\n    { type = \"launcher\", x = -155, y = -78, angle = 90 },\n    { type = \"sweeper\",  x = 60,   y = 30,  length = 100, angle = 0,\n      minAngle = -60, maxAngle = 60, speed = \"S\" },\n    { type = \"hazard\",   x = 0,    y = 40,  radius = 16 },\n    { type = \"hazard\",   x = 60,   y = -100, radius = 16 },\n    { type = \"hazard\",   x = -180, y = 20,  radius = 12 },\n    { type = \"coin\",     x = 60,   y = 30 },\n    { type = \"coin\",     x = -60,  y = 20 },\n    { type = \"coin\",     x = 140,  y = -100 },\n    { type = \"exit\",     x = 180,  y = -100 },\n  }}"},{"n":33,"name":"Assembly Line","theme":"Machinery","lua":"{ name = \"Assembly Line\", theme = \"Machinery\", ceiling = \"open\", objects = {\n    { type = \"spawn\",        x = -160, y = -100 },\n    { type = \"wall\",         x = -150, y = 0,   length = 60, angle = 0 },\n    { type = \"moving_wall\",  x = 0,    y = -40, length = 80, angle = 0,\n      slideAngle = 0, slideRange = \"L\", objectPosition = 0.0, speed = \"S\" },\n    { type = \"sliding_wall\", x = 140,  y = -20, length = 80, angle = 0,\n      slideAngle = 90, slideRange = \"M\", objectPosition = 0.0 },\n    { type = \"hazard\",       x = 0,    y = -100, radius = 18 },\n    { type = \"hazard\",       x = 180,  y = -30, radius = 12 },\n    { type = \"hazard\",       x = -180, y = 50,  radius = 12 },\n    { type = \"coin\",         x = 0,    y = -40 },\n    { type = \"coin\",         x = 140,  y = 10 },\n    { type = \"coin\",         x = -120, y = -20 },\n    { type = \"exit\",         x = 180,  y = 100 },\n  }}"},{"n":34,"name":"Threshing Floor","theme":"Machinery","lua":"{ name = \"Threshing Floor\", theme = \"Machinery\", ceiling = \"solid\", objects = {\n    { type = \"spawn\",         x = -160, y = -100 },\n    { type = \"deflector\",     x = -80,  y = -50, length = 90, angle = 0 },\n    { type = \"deflector\",     x = 0,    y = 0,   length = 90, angle = 0 },\n    { type = \"deflector\",     x = 80,   y = 50,  length = 90, angle = 0 },\n    { type = \"moving_hazard\", x = 0,    y = -70, radius = 12,\n      slideAngle = 0, slideRange = \"L\", objectPosition = 0.5, speed = \"F\" },\n    { type = \"hazard\",        x = 0,    y = -100, radius = 14 },\n    { type = \"hazard\",        x = -180, y = 20,  radius = 12 },\n    { type = \"coin\",          x = -80,  y = -34 },\n    { type = \"coin\",          x = 0,    y = 16 },\n    { type = \"coin\",          x = 80,   y = 66 },\n    { type = \"exit\",          x = 180,  y = 60 },\n  }}"},{"n":35,"name":"Pinwheel","theme":"Machinery","lua":"{ name = \"Pinwheel\", theme = \"Machinery\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",     x = -160, y = -100 },\n    { type = \"deflector\", x = -70,  y = -25, length = 85, angle = 30 },\n    { type = \"deflector\", x = 0,    y = 30,  length = 85, angle = 150 },\n    { type = \"deflector\", x = 70,   y = -10, length = 85, angle = 270 },\n    { type = \"hazard\",    x = 0,    y = -100, radius = 14 },\n    { type = \"hazard\",    x = -180, y = 20,  radius = 12 },\n    { type = \"coin\",      x = -70,  y = -9 },\n    { type = \"coin\",      x = 0,    y = 46 },\n    { type = \"coin\",      x = 70,   y = 6 },\n    { type = \"exit\",      x = 180,  y = -100 },\n  }}"},{"n":36,"name":"Overtime","theme":"Machinery","lua":"{ name = \"Overtime\", theme = \"Machinery\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",         x = -160, y = -100 },\n    { type = \"launcher\",      x = -155, y = -78, angle = 90 },\n    { type = \"sliding_wall\",  x = 50,   y = 40,  length = 80, angle = 0,\n      slideAngle = 90, slideRange = \"M\", objectPosition = 0.3 },\n    { type = \"moving_wall\",   x = 0,    y = -30, length = 70, angle = 0,\n      slideAngle = 0, slideRange = \"M\", objectPosition = 0.0, speed = \"M\" },\n    { type = \"moving_hazard\", x = 90,   y = -20, radius = 12,\n      slideAngle = 90, slideRange = \"S\", objectPosition = 0.0, speed = \"M\" },\n    { type = \"hazard\",        x = 0,    y = -100, radius = 18 },\n    { type = \"hazard\",        x = -180, y = 30,  radius = 12 },\n    { type = \"coin\",          x = 0,    y = -14 },\n    { type = \"coin\",          x = 50,   y = 56 },\n    { type = \"coin\",          x = 160,  y = -100 },\n    { type = \"exit\",          x = 180,  y = -100 },\n  }}"},{"n":37,"name":"Escapement","theme":"Machinery","lua":"{ name = \"Escapement\", theme = \"Machinery\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",       x = -160, y = -100 },\n    { type = \"sweeper\",     x = -40,  y = -40, length = 120, angle = 0,\n      minAngle = -50, maxAngle = 50, speed = \"M\" },\n    { type = \"wall\",        x = 85,   y = 5,   length = 120, angle = 0 },\n    { type = \"toggle_wall\", x = 130,  y = -40, length = 100, angle = 0,\n      angleStep = 90, speed = \"M\" },\n    { type = \"hazard\",      x = 40,   y = -100, radius = 16 },\n    { type = \"hazard\",      x = -180, y = 30,  radius = 12 },\n    { type = \"hazard\",      x = 180,  y = -70, radius = 12 },\n    { type = \"coin\",        x = -40,  y = -40 },\n    { type = \"coin\",        x = 85,   y = 5 },\n    { type = \"coin\",        x = 130,  y = -20 },\n    { type = \"exit\",        x = 180,  y = 80 },\n  }}"},{"n":38,"name":"Full Machine","theme":"Cling Works","lua":"{ name = \"Full Machine\", theme = \"Cling Works\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",        x = -160, y = -100 },\n    { type = \"launcher\",     x = -155, y = -78, angle = 90 },\n    { type = \"deflector\",    x = 0,    y = 20,  length = 110, angle = 0 },\n    { type = \"sliding_wall\", x = 140,  y = -20, length = 80, angle = 0,\n      slideAngle = 90, slideRange = \"M\", objectPosition = 0.0 },\n    { type = \"hazard\",       x = -60,  y = -20, radius = 14 },\n    { type = \"hazard\",       x = -60,  y = -100, radius = 16 },\n    { type = \"hazard\",       x = 180,  y = -30, radius = 12 },\n    { type = \"coin\",         x = 0,    y = 36 },\n    { type = \"coin\",         x = 140,  y = 10 },\n    { type = \"coin\",         x = -40,  y = 40 },\n    { type = \"exit\",         x = 180,  y = 100 },\n  }}"},{"n":39,"name":"Gauntlet Royale","theme":"Cling Works","lua":"{ name = \"Gauntlet Royale\", theme = \"Cling Works\", ceiling = \"open\", objects = {\n    { type = \"spawn\",         x = -160, y = -100 },\n    { type = \"sweeper\",       x = -40,  y = -40, length = 120, angle = 0,\n      minAngle = -50, maxAngle = 50, speed = \"F\" },\n    { type = \"wall\",          x = 85,   y = 5,   length = 120, angle = 0 },\n    { type = \"toggle_wall\",   x = 130,  y = -40, length = 100, angle = 0,\n      angleStep = 90, speed = \"M\" },\n    { type = \"moving_hazard\", x = 170,  y = 40,  radius = 10,\n      slideAngle = 90, slideRange = \"S\", objectPosition = 0.5, speed = \"M\" },\n    { type = \"hazard\",        x = 40,   y = -100, radius = 16 },\n    { type = \"hazard\",        x = -180, y = 30,  radius = 12 },\n    { type = \"hazard\",        x = 180,  y = -70, radius = 12 },\n    { type = \"coin\",          x = -40,  y = -40 },\n    { type = \"coin\",          x = 130,  y = -20 },\n    { type = \"coin\",          x = 180,  y = 40 },\n    { type = \"exit\",          x = 180,  y = 100 },\n  }}"},{"n":40,"name":"The Cling Works","theme":"Cling Works","lua":"{ name = \"The Cling Works\", theme = \"Cling Works\", ceiling = \"spikes\", objects = {\n    { type = \"spawn\",         x = -160, y = -100 },\n    { type = \"launcher\",      x = -155, y = -78, angle = 90 },\n    { type = \"deflector\",     x = 0,    y = 20,  length = 110, angle = 0 },\n    { type = \"sliding_wall\",  x = 140,  y = -20, length = 80, angle = 0,\n      slideAngle = 90, slideRange = \"M\", objectPosition = 0.0 },\n    { type = \"moving_hazard\", x = 70,   y = -40, radius = 12,\n      slideAngle = 0, slideRange = \"M\", objectPosition = 0.5, speed = \"M\" },\n    { type = \"moving_hazard\", x = 170,  y = 40,  radius = 10,\n      slideAngle = 90, slideRange = \"S\", objectPosition = 0.5, speed = \"M\" },\n    { type = \"hazard\",        x = -60,  y = -100, radius = 16 },\n    { type = \"hazard\",        x = 180,  y = -40, radius = 12 },\n    { type = \"coin\",          x = 0,    y = 36 },\n    { type = \"coin\",          x = 140,  y = 10 },\n    { type = \"coin\",          x = 180,  y = 70 },\n    { type = \"exit\",          x = 180,  y = 100 },\n  }}"}];
+
+/* =====================================================================
+   GAMEPLAY SIMULATION — faithful port of rails.lua + cling_ball.lua +
+   the game glue in main.lua. Screen space (Y-down). Rails arrays are
+   1-BASED (index 0 = null) to preserve the Lua code's index semantics.
+   ===================================================================== */
+const SIM = {
+  BALL_RADIUS:5, BALL_CRANK_SENS:0.55, BAR_CRANK_SENS:0.45, BAR_RIDER_SCALE:0.6,
+  BAR_WIDTH:16, JUNCTION_SNAP:16.0, JUNCTION_EPSILON:6.0,
+  COIN_PICKUP:9.0, EXIT_PICKUP:12, COIN_BONUS:500,
+  LAUNCH_SPEED:6.5, MOUTH_DIST:18, LAUNCHER_BOARD_SNAP:28.0, LAUNCH_CATCH_SNAP:14.0,
+  LAUNCH_GRACE:8, LAUNCHER_CRANK_SENS:0.5, SLIDER_CRANK_SENS:0.6,
+  DROP_SPEED:5, DROP_FACE_NY:-0.3, ARENA_INSET:20,
+};
+const mod = (a,n)=>{ const r = a % n; return r < 0 ? r + n : r; };
+
+/* ---------------- rails.lua ---------------- */
+const RL = {
+  segments(rail){
+    const pts = rail.pts, n = pts.length, segs = [];
+    if (n < 2) return segs;
+    const count = rail.closed ? n : n-1;
+    for (let i=0;i<count;i++){
+      const a = pts[i], b = pts[(i+1)%n];
+      segs.push({a,b,len:Math.hypot(b.x-a.x,b.y-a.y)});
+    }
+    return segs;
+  },
+  length(rail){
+    let t=0; for (const s of RL.segments(rail)) t+=s.len; return t;
+  },
+  boardingPoints(rail){
+    if (rail.boardAt) return rail.boardAt;
+    if (rail.closed) return null;
+    return [0, RL.length(rail)];
+  },
+  pointAt(rail, s){
+    const segs = RL.segments(rail);
+    let total=0; for (const sg of segs) total+=sg.len;
+    if (total<=0){ const p=rail.pts[0]; return [p.x,p.y]; }
+    if (rail.closed) s = mod(s,total);
+    else { if (s<0) s=0; if (s>total) s=total; }
+    let rem = s;
+    for (let i=0;i<segs.length;i++){
+      const seg = segs[i];
+      if (rem <= seg.len || i === segs.length-1){
+        let t = seg.len>0 ? rem/seg.len : 0;
+        if (t>1) t=1; if (t<0) t=0;
+        return [seg.a.x + (seg.b.x-seg.a.x)*t, seg.a.y + (seg.b.y-seg.a.y)*t];
+      }
+      rem -= seg.len;
+    }
+    const last = rail.pts[rail.pts.length-1];
+    return [last.x,last.y];
+  },
+  tangentAt(rail, s){
+    const segs = RL.segments(rail);
+    let total=0; for (const sg of segs) total+=sg.len;
+    if (total<=0) return [1,0];
+    let q = s;
+    if (rail.closed) q = mod(q,total);
+    else { if (q<0) q=0; if (q>total) q=total; }
+    let rem = q;
+    for (let i=0;i<segs.length;i++){
+      const seg = segs[i];
+      if (rem < seg.len || i === segs.length-1){
+        if (seg.len <= 1e-6) return [1,0];
+        return [(seg.b.x-seg.a.x)/seg.len, (seg.b.y-seg.a.y)/seg.len];
+      }
+      rem -= seg.len;
+    }
+    return [1,0];
+  },
+  closestPoint(rail, px, py){
+    const segs = RL.segments(rail);
+    let bestDist = Infinity, bestS = 0, accum = 0;
+    for (const seg of segs){
+      const ax=seg.a.x, ay=seg.a.y, bx=seg.b.x, by=seg.b.y;
+      const abx=bx-ax, aby=by-ay, apx=px-ax, apy=py-ay;
+      const ab2 = abx*abx+aby*aby;
+      let t = 0;
+      if (ab2 > 1e-12){
+        t = (apx*abx+apy*aby)/ab2;
+        if (t<0) t=0; else if (t>1) t=1;
+      }
+      const qx=ax+abx*t, qy=ay+aby*t;
+      const d = Math.hypot(px-qx,py-qy);
+      if (d < bestDist){ bestDist = d; bestS = accum + t*seg.len; }
+      accum += seg.len;
+    }
+    return {d:bestDist, s:bestS};
+  },
+  fallHitOnSegment(ax,ay,bx,by,accum,cx,halfW,minY){
+    const xLo=cx-halfW, xHi=cx+halfW;
+    const dx=bx-ax, dy=by-ay;
+    const len = Math.hypot(dx,dy);
+    if (len < 1e-9){
+      if (ax>=xLo && ax<=xHi && ay>=minY) return {hitY:ay, s:accum};
+      return null;
+    }
+    let tMin=0, tMax=1;
+    if (Math.abs(dx) < 1e-9){
+      if (ax<xLo || ax>xHi) return null;
+    } else {
+      let tA=(xLo-ax)/dx, tB=(xHi-ax)/dx;
+      if (tA>tB){ const tmp=tA; tA=tB; tB=tmp; }
+      tMin = Math.max(0,tA); tMax = Math.min(1,tB);
+      if (tMin>tMax) return null;
+    }
+    const yAtTMin = ay+tMin*dy, yAtTMax = ay+tMax*dy;
+    const loY = Math.min(yAtTMin,yAtTMax), hiY = Math.max(yAtTMin,yAtTMax);
+    if (hiY < minY) return null;
+    let hitY = Math.max(loY,minY), hitT;
+    if (Math.abs(dy) < 1e-9) hitT = tMin;
+    else {
+      hitT = (hitY-ay)/dy;
+      if (hitT<tMin) hitT=tMin;
+      if (hitT>tMax) hitT=tMax;
+      hitY = ay + hitT*dy;
+    }
+    return {hitY, s:accum + hitT*len};
+  },
+};
+
+/* ---------------- rail builders (main.lua) ---------------- */
+function makeOpenRailS(x,y,length,angleDeg){
+  const [x1,y1,x2,y2] = barEndpointsScreen(x,y,length,angleDeg);
+  return {closed:false, pts:[{x:x1,y:y1},{x:x2,y:y2}]};
+}
+function makeBarOutlineRailS(x,y,length,angleDeg){
+  const w = SIM.BAR_WIDTH;
+  const a = rad(angleDeg);
+  const ux=Math.cos(a), uy=Math.sin(a), px=-uy, py=ux;
+  const hL=length/2, hW=w/2;
+  const pt = (along,perp)=>({x:x+ux*along+px*perp, y:y+uy*along+py*perp});
+  return {
+    closed:true,
+    pts:[pt(-hL,-hW), pt(hL,-hW), pt(hL,hW), pt(-hL,hW)],
+    kind:"bar_outline", halfWidth:hW, barLength:length,
+    cx:x, cy:y, ux, uy, px, py,
+  };
+}
+function arenaRailS(mode){
+  const inset = SIM.ARENA_INSET;
+  const L=inset, R=CFG.SCREEN_W-inset, T=inset, B=CFG.SCREEN_H-inset;
+  if (mode === "open"){
+    return {closed:false, pts:[{x:L,y:T},{x:L,y:B},{x:R,y:B},{x:R,y:T}]};
+  }
+  return {closed:true, pts:[{x:L,y:T},{x:R,y:T},{x:R,y:B},{x:L,y:B}]};
+}
+
+/* ---------------- sim objects (screen-space; authored objects untouched) --- */
+function makeSimObjects(level){
+  const out = [];
+  for (const a of level.objects){
+    const [sx,sy] = toScreen(a.x, a.y);
+    const o = {type:a.type, x:sx, y:sy};
+    switch(a.type){
+      case "hazard": o.radius = a.radius ?? CFG.HAZARD_RADIUS_DEFAULT; break;
+      case "coin": o.collected = false; break;
+      case "wall": case "deflector":
+        o.length = a.length; o.angle = a.angle||0; break;
+      case "sweeper":
+        o.length = a.length; o.angle = a.angle||0;
+        o.minAngle = a.minAngle ?? 0; o.maxAngle = a.maxAngle ?? 90;
+        o.speed = CFG.SWEEPER_SPEEDS[a.speed] ?? CFG.SWEEPER_SPEEDS.M;
+        o._sweepDir = 1; break;
+      case "toggle_wall":
+        o.length = a.length; o.baseAngle = a.angle||0;
+        o.angle = mod(o.baseAngle, 360);
+        o.angleStep = a.angleStep ?? 45;
+        o.intervalFrames = CFG.TOGGLE_INTERVALS[a.speed] ?? CFG.TOGGLE_INTERVALS.M;
+        o._timer = 0; o._k = 0; break;
+      case "sliding_wall": case "moving_wall": case "moving_hazard": {
+        if (a.type !== "moving_hazard"){ o.length = a.length; o.angle = a.angle||0; }
+        else o.radius = a.radius ?? CFG.HAZARD_RADIUS_DEFAULT;
+        o.slideAngle = a.slideAngle||0;
+        const sp = CFG.SLIDER_SPANS[a.slideRange] ?? CFG.SLIDER_SPANS.M;
+        o.minSlide = -sp; o.maxSlide = sp;
+        o.objectPosition = Math.max(0, Math.min(1, a.objectPosition ?? 0.5));
+        if (a.type !== "sliding_wall"){
+          o.speed = CFG.MOVING_SPEEDS[a.speed] ?? CFG.MOVING_SPEEDS.M;
+          o._moveDir = (o.objectPosition >= 1-0.001) ? -1 : 1;
+        }
+        break;
+      }
+      case "launcher": o.angle = a.angle||0; break;
+    }
+    out.push(o);
+  }
+  return out;
+}
+function simSlideCenter(o){
+  const span = o.maxSlide - o.minSlide;
+  const pix = span <= 0 ? o.minSlide : o.minSlide + o.objectPosition*span;
+  const r = rad(o.slideAngle);
+  return [o.x + Math.cos(r)*pix, o.y + Math.sin(r)*pix];
+}
+function simGetRail(o){
+  switch(o.type){
+    case "wall": case "sweeper": case "toggle_wall":
+      return makeOpenRailS(o.x, o.y, o.length, o.angle);
+    case "deflector":
+      return makeBarOutlineRailS(o.x, o.y, o.length, o.angle);
+    case "sliding_wall": {
+      const [cx,cy] = simSlideCenter(o);
+      return makeBarOutlineRailS(cx, cy, o.length, o.angle);
+    }
+    case "moving_wall": {
+      const [cx,cy] = simSlideCenter(o);
+      return makeOpenRailS(cx, cy, o.length, o.angle);
+    }
+  }
+  return null;
+}
+function simGetMouthPos(o){
+  const a = rad(o.angle||0);
+  return [o.x + Math.cos(a)*SIM.MOUTH_DIST, o.y + Math.sin(a)*SIM.MOUTH_DIST];
+}
+
+/* ---------------- createClingSim ---------------- */
+function createClingSim(level){
+  let ceiling = level.ceiling;
+  if (ceiling !== "open" && ceiling !== "spikes") ceiling = "solid";
+
+  const objects = makeSimObjects(level);
+  const totalCoins = objects.filter(o=>o.type==="coin").length;
+
+  const game = {
+    arenaCeiling: ceiling,
+    rails: [null],          // 1-based
+    railOwners: [null],     // 1-based; owner objects (arena handled as "arena")
+    levelComplete: false,
+    coinsCollected: 0,
+    lastLevelScore: 0,
+    crankTargets: [null, {kind:"ball"}],   // 1-based
+    selIndex: 1,
+    frameCount: 0,
+    tutorial: level.tutorial || "",
+    levelName: level.name || "",
+  };
+  let barIndex = 0;
+  for (const obj of objects){
+    if (obj.type==="deflector" || obj.type==="sliding_wall" || obj.type==="launcher"){
+      barIndex++;
+      if (obj.type==="sliding_wall") obj.barLabel = "SLIDER " + barIndex;
+      else if (obj.type==="launcher") obj.barLabel = "LAUNCH " + barIndex;
+      else obj.barLabel = "BAR " + String.fromCharCode(64+barIndex);
+      game.crankTargets.push({kind:"object", obj});
+    }
+  }
+
+  const ball = {
+    rail:1, s:0, spawnRail:1, spawnS:0,
+    lastDir:1, respawnFlash:0, travelDir:0, frameCount:0, crankPolarity:1,
+    ignoreOwner:null, ignoreClearDist:0,
+    ignoreArcFromS:null, ignoreArcNeed:0, ignoreClearBelowY:null,
+    mode:"cling", dockedLauncher:null,
+    ignoreLauncher:null, ignoreLauncherFrames:0,
+    flightX:0, flightY:0, flightVx:0, flightVy:0, flightGrace:0,
+  };
+  let exitReached = false;
+
+  /* -------- ports of cling_ball.lua -------- */
+  function resetToSpawn(){
+    ball.rail = ball.spawnRail; ball.s = ball.spawnS;
+    ball.lastDir = 1; ball.travelDir = 0; ball.crankPolarity = 1;
+    ball.respawnFlash = 0;
+    ball.ignoreOwner = null; ball.ignoreClearDist = 0;
+    ball.ignoreArcFromS = null; ball.ignoreArcNeed = 0;
+    ball.ignoreClearBelowY = null;
+    ball.mode = "cling"; ball.dockedLauncher = null;
+    ball.ignoreLauncher = null; ball.ignoreLauncherFrames = 0;
+    ball.flightGrace = 0; ball.flightVx = 0; ball.flightVy = 0;
+  }
+  function setSpawn(railIndex, s){ ball.spawnRail = railIndex; ball.spawnS = s; resetToSpawn(); }
+  const isDocked = ()=> ball.mode === "docked";
+  const isInFlight = ()=> ball.mode === "flight";
+  const isFalling = ()=> ball.mode === "falling";
+  function worldPos(){
+    if (ball.mode === "docked" && ball.dockedLauncher) return simGetMouthPos(ball.dockedLauncher);
+    if (ball.mode === "flight" || ball.mode === "falling") return [ball.flightX, ball.flightY];
+    const rail = game.rails[ball.rail];
+    if (!rail) return [0,0];
+    return RL.pointAt(rail, ball.s);
+  }
+  function clampOrWrap(){
+    const rail = game.rails[ball.rail];
+    if (!rail) return;
+    const len = RL.length(rail);
+    if (len <= 0){ ball.s = 0; return; }
+    if (rail.closed) ball.s = mod(ball.s, len);
+    else { if (ball.s < 0) ball.s = 0; if (ball.s > len) ball.s = len; }
+  }
+  function crank(change){
+    if (ball.mode !== "cling") return;
+    if (Math.abs(change) <= 0.1) return;
+    const polarity = ball.crankPolarity || 1;
+    const delta = change * SIM.BALL_CRANK_SENS * polarity;
+    ball.s += delta;
+    ball.lastDir = (delta >= 0) ? 1 : -1;
+    ball.travelDir = ball.lastDir;
+    clampOrWrap();
+  }
+  function consumeTravelDir(){ const d = ball.travelDir; ball.travelDir = 0; return d; }
+
+  function ownerOf(railIndex){
+    if (railIndex === 1) return "arena";
+    return game.railOwners[railIndex] || null;
+  }
+  const arenaCeilingMode = ()=> game.arenaCeiling || "solid";
+  function arenaEdgeLengths(){
+    const inset = SIM.ARENA_INSET;
+    return [CFG.SCREEN_W - 2*inset, CFG.SCREEN_H - 2*inset];
+  }
+  function arenaFloorSRange(){
+    const [W,H] = arenaEdgeLengths();
+    if (arenaCeilingMode() === "open") return [H, H+W];
+    return [W+H, W+H+W];
+  }
+  function arenaCeilingSRange(){
+    const [W] = arenaEdgeLengths();
+    return [0, W];
+  }
+  function arenaFloorSegIndex(){
+    // 1-based segment index, as in the Lua.
+    if (arenaCeilingMode() === "open") return 2;
+    return 3;
+  }
+  function railIndexOfOwner(owner){
+    if (owner === "arena") return 1;
+    for (let i=1;i<game.railOwners.length;i++){
+      if (game.railOwners[i] === owner) return i;
+    }
+    return null;
+  }
+  function tipClearance(rail){
+    const halfW = rail.halfWidth ?? SIM.BAR_WIDTH/2;
+    return halfW + SIM.JUNCTION_EPSILON;
+  }
+  function closestOnBarEndCap(rail, tipAlongSign, px, py){
+    const hL = (rail.barLength || 0)/2;
+    const hW = rail.halfWidth ?? 8;
+    const along = tipAlongSign * hL;
+    const ox = rail.cx + rail.ux*along;
+    const oy = rail.cy + rail.uy*along;
+    let t = (px-ox)*rail.px + (py-oy)*rail.py;
+    if (t < -hW) t = -hW; else if (t > hW) t = hW;
+    const bx = ox + rail.px*t;
+    const by = oy + rail.py*t;
+    const d = Math.hypot(bx-px, by-py);
+    const cp = RL.closestPoint(rail, bx, by);
+    return {d, s:cp.s, cx:bx, cy:by, perp:t, alongSign:tipAlongSign};
+  }
+  function pickOutlinePushSign(rail, landS, landPerp, px, py, tvx, tvy, preferSide){
+    const clear = tipClearance(rail);
+    let bestSign = 1, bestScore = -Infinity;
+    for (const sign of [1,-1]){
+      const [nx,ny] = RL.pointAt(rail, landS + sign*clear);
+      const dist = Math.hypot(nx-px, ny-py);
+      const travel = (nx-px)*tvx + (ny-py)*tvy;
+      const side = (nx-rail.cx)*rail.px + (ny-rail.cy)*rail.py;
+      let sideBonus = 0;
+      if (preferSide != null && preferSide !== 0){
+        sideBonus = (preferSide*side > 0) ? 200 : -200;
+      } else if (landPerp != null && landPerp !== 0){
+        if (landPerp*side > 0) sideBonus = 50;
+        else if (landPerp*side < 0) sideBonus = -50;
+      }
+      const score = sideBonus + travel*3 - dist;
+      if (score > bestScore){ bestScore = score; bestSign = sign; }
+    }
+    return bestSign;
+  }
+  function minDistToOwnerRail(owner, px, py){
+    const idx = railIndexOfOwner(owner);
+    if (!idx) return Infinity;
+    const r = game.rails[idx];
+    if (!r) return Infinity;
+    if (r.kind === "bar_outline"){
+      const dA = closestOnBarEndCap(r,-1,px,py).d;
+      const dB = closestOnBarEndCap(r, 1,px,py).d;
+      return Math.min(dA,dB);
+    }
+    const bpts = RL.boardingPoints(r);
+    if (bpts == null) return RL.closestPoint(r,px,py).d;
+    let best = Infinity;
+    for (const s of bpts){
+      const [bx,by] = RL.pointAt(r,s);
+      const d = Math.hypot(bx-px, by-py);
+      if (d < best) best = d;
+    }
+    return best;
+  }
+  function arenaArcDist(a,b){
+    const arena = game.rails[1];
+    const len = RL.length(arena);
+    if (len <= 0) return 0;
+    let d = mod(Math.abs(a-b), len);
+    if (d > len*0.5) d = len - d;
+    return d;
+  }
+  function clearIgnore(){
+    ball.ignoreOwner = null; ball.ignoreClearDist = 0;
+    ball.ignoreArcFromS = null; ball.ignoreArcNeed = 0;
+    ball.ignoreClearBelowY = null;
+  }
+  function updateIgnoreClear(px,py){
+    if (!ball.ignoreOwner) return;
+    if (ball.ignoreClearBelowY != null){
+      if (py > ball.ignoreClearBelowY) clearIgnore();
+      return;
+    }
+    if (ball.ignoreArcFromS != null && ball.rail === 1){
+      if (arenaArcDist(ball.s, ball.ignoreArcFromS) >= (ball.ignoreArcNeed || 28)) clearIgnore();
+      return;
+    }
+    const d = minDistToOwnerRail(ball.ignoreOwner, px, py);
+    let need = ball.ignoreClearDist;
+    if (need <= 0) need = SIM.JUNCTION_SNAP + 10;
+    if (d > need) clearIgnore();
+  }
+  function isIgnored(railIndex){
+    if (!ball.ignoreOwner) return false;
+    return ownerOf(railIndex) === ball.ignoreOwner;
+  }
+  function leavingThroughTip(rail, tipAlongSign, tvx, tvy){
+    return (rail.ux*tipAlongSign)*tvx + (rail.uy*tipAlongSign)*tvy > 0.35;
+  }
+  function boardingIntoTip(rail, tipAlongSign, tvx, tvy){
+    return (-rail.ux*tipAlongSign)*tvx + (-rail.uy*tipAlongSign)*tvy > 0.2;
+  }
+  function applyTransfer(toRailIndex, landS, sign, push, travelDir, leftIndex){
+    const oldPol = ball.crankPolarity || 1;
+    ball.rail = toRailIndex;
+    ball.s = landS + sign*push;
+    ball.lastDir = sign;
+    ball.crankPolarity = sign * travelDir * oldPol;
+    if (ball.crankPolarity === 0) ball.crankPolarity = 1;
+    clampOrWrap();
+
+    const nRail = game.rails[toRailIndex];
+    if (nRail && !nRail.closed){
+      const len = RL.length(nRail);
+      if (ball.s <= 0.01){
+        ball.s = push; ball.lastDir = 1;
+        ball.crankPolarity = travelDir * oldPol;
+      } else if (ball.s >= len - 0.01){
+        ball.s = len - push; ball.lastDir = -1;
+        ball.crankPolarity = -travelDir * oldPol;
+      }
+    }
+
+    ball.ignoreOwner = ownerOf(leftIndex);
+    const snap = SIM.JUNCTION_SNAP;
+    ball.ignoreClearDist = snap + push + 8;
+    ball.ignoreClearBelowY = null;
+    if (toRailIndex === 1 && ownerOf(leftIndex) !== "arena"){
+      ball.ignoreArcFromS = ball.s;
+      ball.ignoreArcNeed = Math.max(28, push + 12);
+    } else {
+      ball.ignoreArcFromS = null;
+      ball.ignoreArcNeed = 0;
+    }
+  }
+
+  function resolveJunction(travelDir){
+    if (ball.mode !== "cling") return;
+    if (travelDir === 0) return;
+    const myRail = game.rails[ball.rail];
+    if (!myRail) return;
+
+    // Open-top arena: cranking past a top tip drops into freefall.
+    if (ball.rail === 1 && arenaCeilingMode() === "open" && !myRail.closed){
+      const len = RL.length(myRail);
+      const tipEps = 2.0;
+      if ((ball.s <= tipEps && travelDir < 0) || (ball.s >= len - tipEps && travelDir > 0)){
+        beginFallFromCling();
+        return;
+      }
+    }
+
+    const [px,py] = RL.pointAt(myRail, ball.s);
+    updateIgnoreClear(px,py);
+
+    const [mtx,mty] = RL.tangentAt(myRail, ball.s);
+    const tvx = mtx*travelDir, tvy = mty*travelDir;
+    const snap = SIM.JUNCTION_SNAP;
+    const leftIndex = ball.rail;
+
+    // On a bar outline: may exit to arena only through a tip, outward.
+    if (myRail.kind === "bar_outline"){
+      if (!isIgnored(1)){
+        const arena = game.rails[1];
+        let bestTip = null, bestD = snap;
+        for (const tipSign of [-1,1]){
+          const cap = closestOnBarEndCap(myRail, tipSign, px, py);
+          if (cap.d <= bestD && leavingThroughTip(myRail, cap.alongSign, tvx, tvy)){
+            const acp = RL.closestPoint(arena, px, py);
+            if (acp.d <= snap){
+              bestD = cap.d;
+              bestTip = {arenaS: acp.s, tipDist: cap.d, alongSign: cap.alongSign};
+            }
+          }
+        }
+        if (bestTip){
+          const arena2 = game.rails[1];
+          const [ntx,nty] = RL.tangentAt(arena2, bestTip.arenaS);
+          const push = Math.max(SIM.JUNCTION_EPSILON, 14);
+          const backX = px - tvx*10, backY = py - tvy*10;
+          const side = (backX-myRail.cx)*myRail.px + (backY-myRail.cy)*myRail.py;
+          const preferX = myRail.px * ((side >= 0) ? 1 : -1);
+          const preferY = myRail.py * ((side >= 0) ? 1 : -1);
+          const sideDot = ntx*preferX + nty*preferY;
+          const travelDot = ntx*tvx + nty*tvy;
+          let sign;
+          if (Math.abs(sideDot) >= 0.15) sign = (sideDot >= 0) ? 1 : -1;
+          else if (Math.abs(travelDot) >= 0.15) sign = (travelDot >= 0) ? 1 : -1;
+          else {
+            const [ax,ay] = RL.pointAt(arena2, bestTip.arenaS + push);
+            const [bx,by] = RL.pointAt(arena2, bestTip.arenaS - push);
+            const dPos = (ax-myRail.cx)**2 + (ay-myRail.cy)**2;
+            const dNeg = (bx-myRail.cx)**2 + (by-myRail.cy)**2;
+            sign = (dPos >= dNeg) ? 1 : -1;
+          }
+          applyTransfer(1, bestTip.arenaS, sign, push, travelDir, leftIndex);
+          return;
+        }
+      }
+      // Fall through to generic tip checks for other outlines.
+    }
+
+    // Generic / boarding bars from arena or tip-to-tip.
+    let best = null, bestDist = snap;
+    const fromArena = (ball.rail === 1);
+
+    for (let i=1;i<game.rails.length;i++){
+      const r = game.rails[i];
+      if (i === ball.rail || isIgnored(i)) continue;
+      if (r.kind === "bar_outline"){
+        for (const tipSign of [-1,1]){
+          const cap = closestOnBarEndCap(r, tipSign, px, py);
+          if (cap.d <= bestDist){
+            let ok;
+            if (fromArena){
+              const toward = (cap.cx-px)*tvx + (cap.cy-py)*tvy;
+              ok = boardingIntoTip(r, cap.alongSign, tvx, tvy)
+                || toward > 0.02
+                || cap.d <= snap*0.75;
+            } else {
+              const toX = cap.cx-px, toY = cap.cy-py;
+              ok = (cap.d <= 2) || (toX*tvx + toY*tvy > 0.05);
+            }
+            if (ok){
+              bestDist = cap.d;
+              best = {rail:i, s:cap.s, outline:true, perp:cap.perp, alongSign:cap.alongSign, fromArena};
+            }
+          }
+        }
+      } else {
+        const bpts = RL.boardingPoints(r);
+        if (bpts == null){
+          // Arena from a non-outline rail (open wall, etc.)
+          if (myRail.kind !== "bar_outline"){
+            const cp = RL.closestPoint(r, px, py);
+            if (cp.d <= bestDist){
+              const [cx2,cy2] = RL.pointAt(r, cp.s);
+              if (cp.d <= 2 || (cx2-px)*tvx + (cy2-py)*tvy > 0.05){
+                best = {rail:i, s:cp.s}; bestDist = cp.d;
+              }
+            }
+          }
+        } else {
+          for (const s of bpts){
+            const [bx,by] = RL.pointAt(r, s);
+            const d = Math.hypot(bx-px, by-py);
+            if (d <= bestDist){
+              if (d <= 2 || (bx-px)*tvx + (by-py)*tvy > 0.05){
+                best = {rail:i, s}; bestDist = d;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    if (!best) return;
+
+    const nRail = game.rails[best.rail];
+    let sign;
+    let push = SIM.JUNCTION_EPSILON;
+
+    if (best.outline){
+      let preferSide = null;
+      if (best.fromArena){
+        const travelSide = tvx*nRail.px + tvy*nRail.py;
+        if (Math.abs(travelSide) > 0.05) preferSide = -travelSide;
+      }
+      sign = pickOutlinePushSign(nRail, best.s, best.perp, px, py, tvx, tvy, preferSide);
+      push = tipClearance(nRail);
+    } else {
+      const [ntx,nty] = RL.tangentAt(nRail, best.s);
+      const dot = ntx*tvx + nty*tvy;
+      sign = (dot >= 0) ? 1 : -1;
+      if (Math.abs(dot) < 0.05){
+        let bestSgn = 1, bestD2 = -1;
+        for (const sgn of [1,-1]){
+          const [nx,ny] = RL.pointAt(nRail, best.s + sgn*push);
+          const dd = (nx-px)**2 + (ny-py)**2;
+          if (dd > bestD2){ bestD2 = dd; bestSgn = sgn; }
+        }
+        sign = bestSgn;
+      }
+      if (!nRail.closed){
+        const len = RL.length(nRail);
+        sign = (best.s <= len*0.5) ? 1 : -1;
+        push = Math.max(push, 10);
+      }
+    }
+
+    applyTransfer(best.rail, best.s, sign, push, travelDir, leftIndex);
+  }
+
+  function tryBoardLauncher(){
+    if (ball.mode === "flight" || ball.mode === "falling") return;
+    if (ball.ignoreLauncherFrames > 0){
+      ball.ignoreLauncherFrames--;
+      if (ball.ignoreLauncherFrames <= 0) ball.ignoreLauncher = null;
+    }
+    if (ball.mode === "docked") return;
+    const [px,py] = worldPos();
+    const snap = SIM.LAUNCHER_BOARD_SNAP;
+    let best = null, bestD = snap;
+    for (const obj of objects){
+      if (obj.type === "launcher" && obj !== ball.ignoreLauncher){
+        const [mx,my] = simGetMouthPos(obj);
+        const dMouth = Math.hypot(mx-px, my-py);
+        const dCenter = Math.hypot(obj.x-px, obj.y-py);
+        const d = Math.min(dMouth, dCenter);
+        if (d < bestD){ bestD = d; best = obj; }
+      }
+    }
+    if (best){
+      ball.mode = "docked";
+      ball.dockedLauncher = best;
+      ball.travelDir = 0;
+      clearIgnore();
+    }
+  }
+  function fire(){
+    if (ball.mode !== "docked" || !ball.dockedLauncher) return false;
+    const launcher = ball.dockedLauncher;
+    const [mx,my] = simGetMouthPos(launcher);
+    const a = rad(launcher.angle || 0);
+    const speed = SIM.LAUNCH_SPEED;
+    ball.flightX = mx; ball.flightY = my;
+    ball.flightVx = Math.cos(a)*speed;
+    ball.flightVy = Math.sin(a)*speed;
+    ball.mode = "flight";
+    ball.dockedLauncher = null;
+    ball.ignoreLauncher = launcher;
+    ball.ignoreLauncherFrames = 20;
+    ball.flightGrace = SIM.LAUNCH_GRACE;
+    ball.travelDir = 0;
+    return true;
+  }
+  function landFromFlight(railIndex, landS){
+    const nRail = game.rails[railIndex];
+    if (!nRail) return;
+    const [ntx,nty] = RL.tangentAt(nRail, landS);
+    let vx = ball.flightVx, vy = ball.flightVy;
+    let vlen = Math.hypot(vx,vy);
+    if (vlen < 0.01){ vx = ntx; vy = nty; vlen = 1; }
+    const ux = vx/vlen, uy = vy/vlen;
+    const dot = ntx*ux + nty*uy;
+    let sign = (dot >= 0) ? 1 : -1;
+    let push = SIM.JUNCTION_EPSILON;
+    if (nRail.kind === "bar_outline"){
+      push = tipClearance(nRail);
+      let preferSide = -(ux*nRail.px + uy*nRail.py);
+      if (Math.abs(preferSide) < 0.05) preferSide = null;
+      sign = pickOutlinePushSign(nRail, landS, null, ball.flightX, ball.flightY, ux, uy, preferSide);
+    } else if (!nRail.closed){
+      const len = RL.length(nRail);
+      sign = (landS <= len*0.5) ? 1 : -1;
+      push = Math.max(push, 10);
+    }
+    ball.mode = "cling";
+    ball.rail = railIndex;
+    ball.s = landS + sign*push;
+    ball.lastDir = sign;
+    ball.crankPolarity = 1;
+    ball.flightVx = 0; ball.flightVy = 0; ball.flightGrace = 0;
+    clearIgnore();
+    clampOrWrap();
+  }
+  function die(){
+    resetToSpawn();
+    ball.respawnFlash = 22;
+  }
+  function stepFlight(){
+    if (ball.mode !== "flight") return;
+    ball.flightX += ball.flightVx;
+    ball.flightY += ball.flightVy;
+    const margin = 40;
+    if (ball.flightX < -margin || ball.flightX > CFG.SCREEN_W + margin
+      || ball.flightY < -margin || ball.flightY > CFG.SCREEN_H + margin){
+      die();
+      return;
+    }
+    if (ball.flightGrace > 0){ ball.flightGrace--; return; }
+    const snap = SIM.LAUNCH_CATCH_SNAP;
+    let bestI = null, bestS = 0, bestD = snap;
+    const [c0,c1] = arenaCeilingSRange();
+    const skipCeiling = arenaCeilingMode() === "spikes";
+    for (let i=1;i<game.rails.length;i++){
+      const r = game.rails[i];
+      const cp = RL.closestPoint(r, ball.flightX, ball.flightY);
+      if (cp.d < bestD){
+        if (skipCeiling && i === 1 && cp.s >= c0 && cp.s < c1){
+          // Spiky top is not a catchable rail.
+        } else {
+          bestD = cp.d; bestI = i; bestS = cp.s;
+        }
+      }
+    }
+    if (bestI) landFromFlight(bestI, bestS);
+  }
+
+  /* ---- drop / falling ---- */
+  function ownerMaxY(owner){
+    const idx = railIndexOfOwner(owner);
+    if (!idx) return null;
+    const r = game.rails[idx];
+    if (!r || !r.pts) return null;
+    let maxY = -Infinity;
+    for (const p of r.pts) if (p.y > maxY) maxY = p.y;
+    if (maxY === -Infinity) return null;
+    return maxY;
+  }
+  function beginFallFromCling(){
+    const [px,py] = worldPos();
+    const leftIndex = ball.rail;
+    const owner = ownerOf(leftIndex);
+    ball.flightX = px; ball.flightY = py;
+    ball.flightVx = 0; ball.flightVy = SIM.DROP_SPEED;
+    ball.mode = "falling";
+    ball.travelDir = 0; ball.lastDir = 1; ball.crankPolarity = 1;
+    ball.dockedLauncher = null; ball.flightGrace = 0;
+    ball.ignoreOwner = owner;
+    ball.ignoreClearDist = 0;
+    ball.ignoreArcFromS = null; ball.ignoreArcNeed = 0;
+    ball.ignoreClearBelowY = ownerMaxY(owner);
+    if (ball.ignoreClearBelowY == null) ball.ignoreClearBelowY = py;
+  }
+  function isOnArenaFloor(){
+    if (ball.rail !== 1) return false;
+    const arena = game.rails[1];
+    if (!arena) return false;
+    const len = RL.length(arena);
+    if (len <= 0) return false;
+    let s = mod(ball.s, len);
+    if (!arena.closed){
+      s = ball.s;
+      if (s < 0) s = 0;
+      if (s > len) s = len;
+    }
+    const [s0,s1] = arenaFloorSRange();
+    return s >= s0 && s < s1;
+  }
+  const faceNyThreshold = ()=> SIM.DROP_FACE_NY;
+  function segmentStandingNormal(rail, seg){
+    const dx = seg.b.x - seg.a.x, dy = seg.b.y - seg.a.y;
+    const len = seg.len;
+    if (len <= 1e-6) return [0,0];
+    return [dy/len, -dx/len];
+  }
+  function segmentIsLandable(rail, segIndex1, seg){
+    // segIndex1 is 1-BASED, matching the Lua.
+    const faceNy = faceNyThreshold();
+    if (rail.kind === "bar_outline"){
+      if (segIndex1 === 1) return (-rail.py) < faceNy;
+      if (segIndex1 === 3) return rail.py < faceNy;
+      return false;
+    }
+    if (!rail.kind){
+      return segIndex1 === arenaFloorSegIndex();
+    }
+    const [,ny] = segmentStandingNormal(rail, seg);
+    return ny < faceNy;
+  }
+  function barTopPreferSide(rail){
+    const faceNy = faceNyThreshold();
+    if (rail.py < faceNy) return 1;
+    if ((-rail.py) < faceNy) return -1;
+    if (rail.py <= 0) return 1;
+    return -1;
+  }
+  function findFallLanding(cx, minY, maxY, useIgnore){
+    const halfW = SIM.BALL_RADIUS;
+    let bestI = null, bestS = 0, bestY = Infinity;
+    for (let i=1;i<game.rails.length;i++){
+      const r = game.rails[i];
+      const skip = useIgnore && isIgnored(i) && ball.ignoreOwner !== "arena";
+      if (skip) continue;
+      const segs = RL.segments(r);
+      let accum = 0;
+      for (let si=0; si<segs.length; si++){
+        const seg = segs[si];
+        if (segmentIsLandable(r, si+1, seg)){
+          const hit = RL.fallHitOnSegment(seg.a.x, seg.a.y, seg.b.x, seg.b.y, accum, cx, halfW, minY);
+          if (hit && hit.hitY < bestY){
+            if (maxY == null || hit.hitY <= maxY){
+              bestY = hit.hitY; bestI = i; bestS = hit.s;
+            }
+          }
+        }
+        accum += seg.len;
+      }
+    }
+    if (bestI) return {i:bestI, s:bestS, y:bestY};
+    return null;
+  }
+  function landFromFall(railIndex, landS){
+    const nRail = game.rails[railIndex];
+    if (!nRail) return;
+    let push = SIM.JUNCTION_EPSILON;
+    let sign = 1;
+    if (nRail.kind === "bar_outline"){
+      push = tipClearance(nRail);
+      const preferSide = barTopPreferSide(nRail);
+      sign = pickOutlinePushSign(nRail, landS, null, ball.flightX, ball.flightY, 0, 1, preferSide);
+    } else if (railIndex === 1){
+      sign = 1; push = 0;
+    } else if (!nRail.closed){
+      const len = RL.length(nRail);
+      sign = (landS <= len*0.5) ? 1 : -1;
+      push = Math.max(push, 10);
+    }
+    ball.mode = "cling";
+    ball.rail = railIndex;
+    ball.s = landS + sign*push;
+    ball.lastDir = 1;
+    ball.crankPolarity = 1;
+    ball.travelDir = 0;
+    ball.flightVx = 0; ball.flightVy = 0; ball.flightGrace = 0;
+    clearIgnore();
+    clampOrWrap();
+  }
+  function hasLandableBelow(cx, cy){
+    return findFallLanding(cx, cy + 0.5, null, false) != null;
+  }
+  function tryDrop(){
+    if (ball.mode !== "cling") return false;
+    if (game.levelComplete) return false;
+    let refused = false;
+    if (isOnArenaFloor()) refused = true;
+    else {
+      const [px,py] = worldPos();
+      if (!hasLandableBelow(px,py)) refused = true;
+    }
+    if (refused) return false;
+    beginFallFromCling();
+    return true;
+  }
+  function stepFall(){
+    if (ball.mode !== "falling") return;
+    const prevY = ball.flightY;
+    const speed = SIM.DROP_SPEED;
+    ball.flightVx = 0; ball.flightVy = speed;
+    ball.flightY += speed;
+    updateIgnoreClear(ball.flightX, ball.flightY);
+    const r = SIM.BALL_RADIUS;
+    const hit = findFallLanding(ball.flightX, prevY - r, ball.flightY + r, true);
+    if (hit){
+      ball.flightY = hit.y;
+      landFromFall(hit.i, hit.s);
+      return;
+    }
+    // Safety: never fall out of the world — snap to arena floor.
+    const inset = SIM.ARENA_INSET;
+    const floorY = CFG.SCREEN_H - inset;
+    if (ball.flightY >= floorY){
+      const R = CFG.SCREEN_W - inset, L = inset;
+      let x = ball.flightX;
+      if (x < L) x = L; else if (x > R) x = R;
+      const floorStart = arenaFloorSRange()[0];
+      let landS;
+      if (arenaCeilingMode() === "open") landS = floorStart + (x - L);
+      else landS = floorStart + (R - x);
+      ball.flightY = floorY;
+      landFromFall(1, landS);
+    }
+  }
+
+  function collectCoins(){
+    const [px,py] = worldPos();
+    const r = SIM.COIN_PICKUP;
+    for (const obj of objects){
+      if (obj.type === "coin" && !obj.collected){
+        const dx = obj.x - px, dy = obj.y - py;
+        if (dx*dx + dy*dy < r*r){
+          obj.collected = true;
+          game.coinsCollected++;
+        }
+      }
+    }
+  }
+  function checkExit(){
+    if (exitReached) return;
+    if (game.levelComplete) return;
+    const [px,py] = worldPos();
+    const r = SIM.EXIT_PICKUP;
+    for (const obj of objects){
+      if (obj.type === "exit"){
+        const dx = obj.x - px, dy = obj.y - py;
+        if (dx*dx + dy*dy < r*r){ exitReached = true; return; }
+      }
+    }
+  }
+  function checkHazards(){
+    if (arenaCeilingMode() === "spikes" && ball.mode === "cling" && ball.rail === 1){
+      const arena = game.rails[1];
+      if (arena){
+        const len = RL.length(arena);
+        const s = mod(ball.s, len);
+        const [c0,c1] = arenaCeilingSRange();
+        if (s >= c0 && s < c1){ die(); return; }
+      }
+    }
+    const [px,py] = worldPos();
+    const br = SIM.BALL_RADIUS;
+    for (const obj of objects){
+      if (obj.type === "hazard" || obj.type === "moving_hazard"){
+        let cx = obj.x, cy = obj.y;
+        if (obj.type === "moving_hazard") [cx,cy] = simSlideCenter(obj);
+        const dx = cx - px, dy = cy - py;
+        const hitR = (obj.radius ?? CFG.HAZARD_RADIUS_DEFAULT) + br;
+        if (dx*dx + dy*dy < hitR*hitR){ die(); return; }
+      }
+    }
+  }
+
+  /* -------- game glue (main.lua) -------- */
+  function buildRails(){
+    game.rails = [null, arenaRailS(game.arenaCeiling)];
+    game.railOwners = [null, null];
+    for (const obj of objects){
+      const r = simGetRail(obj);
+      if (r){ game.rails.push(r); game.railOwners.push(obj); }
+    }
+  }
+  function railIndexOf(obj){
+    for (let i=1;i<game.railOwners.length;i++){
+      if (game.railOwners[i] === obj) return i;
+    }
+    return null;
+  }
+  function stepAutoMovers(){
+    for (const obj of objects){
+      if (obj.type === "sweeper"){
+        obj.angle += obj._sweepDir * obj.speed;
+        if (obj.angle >= obj.maxAngle){ obj.angle = obj.maxAngle; obj._sweepDir = -1; }
+        else if (obj.angle <= obj.minAngle){ obj.angle = obj.minAngle; obj._sweepDir = 1; }
+      } else if (obj.type === "moving_wall" || obj.type === "moving_hazard"){
+        obj.objectPosition += obj._moveDir * obj.speed;
+        if (obj.objectPosition >= 1){ obj.objectPosition = 1; obj._moveDir = -1; }
+        else if (obj.objectPosition <= 0){ obj.objectPosition = 0; obj._moveDir = 1; }
+      } else if (obj.type === "toggle_wall"){
+        obj._timer++;
+        if (obj._timer >= obj.intervalFrames){
+          obj._timer = 0;
+          obj._k++;
+          obj.angle = mod(obj.baseAngle + obj._k * obj.angleStep, 360);
+        }
+      }
+    }
+  }
+  function applyCrankToObject(obj, change){
+    if (obj.type === "deflector"){
+      let sens = SIM.BAR_CRANK_SENS;
+      const ri = railIndexOf(obj);
+      if (ri && ball.rail === ri) sens *= SIM.BAR_RIDER_SCALE;
+      obj.angle = mod(obj.angle + change*sens, 360);   // DEFLECTOR_ANGLE_STEP is 0 (free rotate)
+    } else if (obj.type === "sliding_wall"){
+      const span = obj.maxSlide - obj.minSlide;
+      if (span <= 0) return;
+      obj.objectPosition += change * SIM.SLIDER_CRANK_SENS / span;
+      if (obj.objectPosition < 0) obj.objectPosition = 0;
+      else if (obj.objectPosition > 1) obj.objectPosition = 1;
+    } else if (obj.type === "launcher"){
+      obj.angle = mod(obj.angle + change * SIM.LAUNCHER_CRANK_SENS, 360);
+    }
+  }
+  function selectCling(){
+    if (isDocked()){ fire(); return; }
+    if (game.selIndex === 1) return;
+    game.selIndex = 1;
+  }
+  function cycleObjects(dir){
+    const n = game.crankTargets.length - 1; // 1-based count
+    if (n < 2) return;
+    const first = 2, last = n;
+    let idx;
+    if (game.selIndex < first) idx = (dir > 0) ? first : last;
+    else {
+      idx = game.selIndex + dir;
+      if (idx > last) idx = first;
+      else if (idx < first) idx = last;
+    }
+    if (idx === game.selIndex) return;
+    game.selIndex = idx;
+  }
+  function handleCrank(change){
+    if (Math.abs(change) <= 0.1) return;
+    if (game.levelComplete) return;
+    if (isDocked()){
+      const launcher = ball.dockedLauncher;
+      if (launcher){ applyCrankToObject(launcher, change); return; }
+    }
+    if (isInFlight()) return;
+    if (isFalling()){
+      const t = game.crankTargets[game.selIndex];
+      if (t && t.kind === "object") applyCrankToObject(t.obj, change);
+      return;
+    }
+    const t = game.crankTargets[game.selIndex];
+    if (!t) return;
+    if (t.kind === "ball") crank(change);
+    else applyCrankToObject(t.obj, change);
+  }
+  function restartLevel(){
+    for (const obj of objects) if (obj.type === "coin") obj.collected = false;
+    game.coinsCollected = 0;
+    game.levelComplete = false;
+    game.lastLevelScore = 0;
+    exitReached = false;
+    resetToSpawn();
+    game.selIndex = 1;
+  }
+  function projectSpawnOntoRails(spawn){
+    let bestRail = 1, bestS = 0, bestD = Infinity;
+    for (let i=1;i<game.rails.length;i++){
+      const cp = RL.closestPoint(game.rails[i], spawn.x, spawn.y);
+      if (cp.d < bestD){ bestD = cp.d; bestRail = i; bestS = cp.s; }
+    }
+    setSpawn(bestRail, bestS);
+  }
+  function update(){
+    if (game.levelComplete) return;
+    game.frameCount++;
+    if (ball.respawnFlash > 0) ball.respawnFlash--;
+    ball.frameCount++;
+    const sel = game.crankTargets[game.selIndex];
+
+    stepAutoMovers();
+    buildRails();
+
+    if (isInFlight()) stepFlight();
+    else if (isFalling()) stepFall();
+    else if (isDocked()) tryBoardLauncher();
+    else {
+      let travel = 0;
+      if (sel && sel.kind === "ball") travel = consumeTravelDir();
+      else consumeTravelDir();
+      resolveJunction(travel);
+      tryBoardLauncher();
+    }
+    collectCoins();
+    checkHazards();
+    checkExit();
+
+    if (!game.levelComplete && exitReached){
+      game.levelComplete = true;
+      game.lastLevelScore = SIM.COIN_BONUS * game.coinsCollected;
+    }
+  }
+  function selectionLabel(){
+    if (isDocked()) return "CRANK: AIM · \u2191 FIRE";
+    if (isInFlight()) return "FLIGHT";
+    if (isFalling()) return "FALLING";
+    const t = game.crankTargets[game.selIndex];
+    if (!t) return "CRANK: ?";
+    if (t.kind === "ball") return "CRANK: CLING";
+    return "CRANK: " + (t.obj.barLabel || "BAR");
+  }
+
+  /* -------- level load (main.lua loadLevel tail) -------- */
+  buildRails();
+  const spawnObj = objects.find(o=>o.type==="spawn");
+  if (spawnObj) projectSpawnOntoRails(spawnObj);
+  else {
+    const inset = SIM.ARENA_INSET;
+    const cp = RL.closestPoint(game.rails[1], inset + 40, CFG.SCREEN_H - inset);
+    setSpawn(1, cp.s);
+  }
+
+  return {
+    game, ball, objects, totalCoins,
+    update, handleCrank, selectCling, cycleObjects, tryDrop, restartLevel,
+    worldPos, selectionLabel, fire,
+    isDocked, isInFlight, isFalling,
+    // internals exposed for tests
+    _resolveJunction: resolveJunction, _buildRails: buildRails,
+  };
+}
+
+/* expose core for headless tests */
+if (typeof module !== "undefined" && module.exports){
+  module.exports = {exportLevel, importLevelFromLua, parseLuaText, slideBodyScreen, barEndpointsScreen, toScreen, toCenter, newObject, CFG, SIM, RL, createClingSim, makeBarOutlineRailS, makeOpenRailS, arenaRailS};
+}
+
+/* =====================================================================
+   Editor (browser only)
+   ===================================================================== */
+if (typeof document !== "undefined") (function(){
+
+/* ---------- state ---------- */
+let level = { name:"Untitled", theme:"Roll", ceiling:"solid", tutorial:"", objects:[] };
+let selIdx = -1;
+let armedTool = null;          // palette tool awaiting placement
+let playing = false;
+let runtime = null;            // per-object runtime state during play
+let undoStack = [], redoStack = [];
+let frame = 0;                 // cosmetic animation frame (always running)
+let cursorCC = null;           // cursor in center-origin coords
+let drag = null;               // {mode:'move'|'rotate'|'slideangle', ...}
+
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+ctx.imageSmoothingEnabled = false;
+
+/* ---------- dither patterns (Bayer 8x8), alpha = white fraction ---------- */
+const BAYER8 = [
+  [0,32,8,40,2,34,10,42],[48,16,56,24,50,18,58,26],[12,44,4,36,14,46,6,38],
+  [60,28,52,20,62,30,54,22],[3,35,11,43,1,33,9,41],[51,19,59,27,49,17,57,25],
+  [15,47,7,39,13,45,5,37],[63,31,55,23,61,29,53,21]];
+const patternCache = {};
+function dither(alpha){
+  const key = alpha.toFixed(2);
+  if (patternCache[key]) return patternCache[key];
+  const c = document.createElement("canvas"); c.width = 8; c.height = 8;
+  const g = c.getContext("2d");
+  const img = g.createImageData(8,8);
+  for (let y=0;y<8;y++) for (let x=0;x<8;x++){
+    const v = BAYER8[y][x]/64;
+    const on = v >= alpha; // black where threshold met
+    const p = (y*8+x)*4;
+    img.data[p]=17; img.data[p+1]=17; img.data[p+2]=17; img.data[p+3] = on?255:0;
+  }
+  g.putImageData(img,0,0);
+  const pat = ctx.createPattern(c,"repeat");
+  patternCache[key] = pat;
+  return pat;
+}
+const INK = "#111";
+
+/* ---------- effective (play-aware) values ---------- */
+function effAngle(o,i){
+  if (playing && runtime && runtime[i] && runtime[i].angle !== undefined) return runtime[i].angle;
+  if (o.type === "toggle_wall") return ((o.angle||0)%360+360)%360;
+  return o.angle||0;
+}
+function effPos(o,i){
+  if (playing && runtime && runtime[i] && runtime[i].pos !== undefined) return runtime[i].pos;
+  return o.objectPosition;
+}
+function bodyCenterScreen(o,i){
+  if (SLIDE_TYPES.has(o.type)) return slideBodyScreen(o, effPos(o,i));
+  return toScreen(o.x,o.y);
+}
+
+/* ---------- drawing ports from main.lua ---------- */
+function drawWallBody(cx,cy,len,angleDeg,lineWidth){
+  const a = rad(angleDeg), c=Math.cos(a), s=Math.sin(a), h=len/2;
+  const x1=cx-c*h, y1=cy-s*h, x2=cx+c*h, y2=cy+s*h;
+  const px=-s*2, py=c*2;
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = lineWidth || CFG.WALL_LINE_WIDTH;
+  ctx.lineCap = "butt";
+  ctx.beginPath(); ctx.moveTo(x1+px,y1+py); ctx.lineTo(x2+px,y2+py); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(x1-px,y1-py); ctx.lineTo(x2-px,y2-py); ctx.stroke();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = dither(0.5);
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  ctx.fillStyle = INK;
+  ctx.beginPath(); ctx.arc(x1,y1,2,0,7); ctx.fill();
+  ctx.beginPath(); ctx.arc(x2,y2,2,0,7); ctx.fill();
+}
+function drawHazardBody(cx,cy,r,fc){
+  const bladeCount = 8;
+  const baseAngle = (fc*4)%360;
+  const rHub = Math.max(4.5, r*0.22);
+  const halfTooth = rad(360/bladeCount)*0.44;
+  ctx.fillStyle = INK;
+  for (let bi=0; bi<bladeCount; bi++){
+    const a = rad(baseAngle + bi*(360/bladeCount));
+    ctx.beginPath();
+    ctx.moveTo(cx+Math.cos(a)*r, cy+Math.sin(a)*r);
+    ctx.lineTo(cx+Math.cos(a-halfTooth)*rHub, cy+Math.sin(a-halfTooth)*rHub);
+    ctx.lineTo(cx+Math.cos(a+halfTooth)*rHub, cy+Math.sin(a+halfTooth)*rHub);
+    ctx.closePath(); ctx.fill();
+  }
+  ctx.beginPath(); ctx.arc(cx,cy,4,0,7); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx,cy,5,0,7); ctx.stroke();
+}
+function drawSlideRailAtS(sx,sy,slideAngleDeg,mn,mx){
+  const r = rad(slideAngleDeg||0);
+  const ex1=sx+Math.cos(r)*mn, ey1=sy+Math.sin(r)*mn;
+  const ex2=sx+Math.cos(r)*mx, ey2=sy+Math.sin(r)*mx;
+  ctx.strokeStyle = dither(0.55); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(ex1,ey1); ctx.lineTo(ex2,ey2); ctx.stroke();
+  ctx.fillStyle = INK;
+  ctx.beginPath(); ctx.arc(ex1,ey1,3,0,7); ctx.fill();
+  ctx.beginPath(); ctx.arc(ex2,ey2,3,0,7); ctx.fill();
+}
+function drawSlideRailFor(o){
+  const [sx,sy] = toScreen(o.x,o.y);
+  const sp = slideSpan(o);
+  drawSlideRailAtS(sx,sy,o.slideAngle||0,-sp,sp);
+}
+function drawDeflectorAtS(cx,cy,length,angleDeg,selected){
+  const a = rad(angleDeg);
+  const ux=Math.cos(a), uy=Math.sin(a), px=-uy, py=ux;
+  const hL=length/2, hW=CFG.BAR_WIDTH/2;
+  if (selected) dashedCircle(cx,cy,hL+hW);
+  const P=(su,sp)=>[cx+ux*su+px*sp, cy+uy*su+py*sp];
+  const c0=P(-hL,-hW), c1=P(hL,-hW), c2=P(hL,hW), c3=P(-hL,hW);
+  ctx.fillStyle = dither(0.25);
+  ctx.beginPath(); ctx.moveTo(...c0); ctx.lineTo(...c1); ctx.lineTo(...c2); ctx.lineTo(...c3); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = selected?3:2; ctx.lineJoin="miter";
+  ctx.beginPath(); ctx.moveTo(...c0); ctx.lineTo(...c1); ctx.lineTo(...c2); ctx.lineTo(...c3); ctx.closePath(); ctx.stroke();
+  ctx.lineWidth = 1;
+  ctx.fillStyle = INK;
+  ctx.beginPath(); ctx.arc(cx,cy,4,0,7); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx,cy,5,0,7); ctx.stroke();
+}
+function drawDeflector(o,i,selected){
+  const [cx,cy] = toScreen(o.x,o.y);
+  drawDeflectorAtS(cx,cy,o.length,effAngle(o,i),selected);
+}
+function dashedCircle(cx,cy,radius){
+  ctx.strokeStyle = dither(0.45); ctx.lineWidth = 1;
+  ctx.setLineDash([3,3]);
+  ctx.beginPath(); ctx.arc(cx,cy,radius,0,7); ctx.stroke();
+  ctx.setLineDash([]);
+}
+function drawSweeperAtS(cx,cy,length,angleDeg){
+  const [x1,y1,x2,y2] = barEndpointsScreen(cx,cy,length,angleDeg);
+  ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.lineCap="butt";
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+  ctx.lineWidth = 1;
+  ctx.fillStyle = INK;
+  ctx.beginPath(); ctx.arc(cx,cy,2,0,7); ctx.fill();
+}
+function drawSweeper(o,i){
+  const [cx,cy] = toScreen(o.x,o.y);
+  drawSweeperAtS(cx,cy,o.length,effAngle(o,i));
+}
+function drawLauncherAtS(cx,cy,angleDeg,selected){
+  const a = rad(angleDeg);
+  const ux=Math.cos(a), uy=Math.sin(a), px=-uy, py=ux;
+  if (selected) dashedCircle(cx,cy,22);
+  const housingW = (frame%30<15)?10:9, housingH = 8;
+  const hw=housingW/2, hh=housingH/2;
+  ctx.fillStyle = INK;
+  ctx.beginPath();
+  ctx.moveTo(cx-ux*hw+px*hh, cy-uy*hw+py*hh);
+  ctx.lineTo(cx+ux*hw+px*hh, cy+uy*hw+py*hh);
+  ctx.lineTo(cx+ux*hw-px*hh, cy+uy*hw-py*hh);
+  ctx.lineTo(cx-ux*hw-px*hh, cy-uy*hw-py*hh);
+  ctx.closePath(); ctx.fill();
+  const bs = hw, bl = 14, gap = 2;
+  const bsx=cx+ux*bs, bsy=cy+uy*bs, bex=cx+ux*(bs+bl), bey=cy+uy*(bs+bl);
+  ctx.strokeStyle = INK; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(bsx+px*gap,bsy+py*gap); ctx.lineTo(bex+px*gap,bey+py*gap); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(bsx-px*gap,bsy-py*gap); ctx.lineTo(bex-px*gap,bey-py*gap); ctx.stroke();
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(bex,bey,2,0,7); ctx.fill();
+}
+function drawLauncher(o,i,selected){
+  const [cx,cy] = toScreen(o.x,o.y);
+  drawLauncherAtS(cx,cy,effAngle(o,i),selected);
+}
+function drawCoinAtS(cx,cy){
+  const pulse = 5 + Math.sin(frame*0.2)*0.8;
+  ctx.strokeStyle = INK; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx,cy,Math.floor(pulse+0.5),0,7); ctx.stroke();
+  ctx.fillStyle = INK;
+  ctx.beginPath(); ctx.arc(cx,cy,2,0,7); ctx.fill();
+}
+function drawCoin(o){
+  const [cx,cy] = toScreen(o.x,o.y);
+  drawCoinAtS(cx,cy);
+}
+function drawSpawnAtS(cx,cy){
+  ctx.strokeStyle = dither(0.5); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx,cy,7,0,7); ctx.stroke();
+}
+function drawSpawn(o){
+  const [cx,cy] = toScreen(o.x,o.y);
+  drawSpawnAtS(cx,cy);
+}
+function drawExitAtS(cx,cy){
+  const pulse = Math.sin(frame*0.15)*1.5;
+  const half = 8 + pulse;
+  ctx.strokeStyle = INK; ctx.lineWidth = 2;
+  ctx.strokeRect(cx-half, cy-half-2, half*2, half*2+4);
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(cx,cy-half+2); ctx.lineTo(cx,cy+half); ctx.stroke();
+  ctx.fillStyle = INK;
+  ctx.beginPath(); ctx.arc(cx+half-3, cy, 1.5, 0, 7); ctx.fill();
+}
+function drawExit(o){
+  const [cx,cy] = toScreen(o.x,o.y);
+  drawExitAtS(cx,cy);
+}
+function drawArena(mode){
+  const inset = CFG.ARENA_INSET;
+  const L=inset, R=CFG.SCREEN_W-inset, T=inset, B=CFG.SCREEN_H-inset;
+  mode = mode || "solid";
+  ctx.strokeStyle = dither(0.35); ctx.lineWidth = 1;
+  if (mode === "open"){
+    ctx.beginPath();
+    ctx.moveTo(L,T); ctx.lineTo(L,B); ctx.lineTo(R,B); ctx.lineTo(R,T);
+    ctx.stroke();
+  } else {
+    ctx.strokeRect(L,T,R-L,B-T);
+    if (mode === "spikes"){
+      ctx.fillStyle = INK;
+      const toothW=10, toothH=8;
+      let x = L;
+      while (x < R-2){
+        const tip = Math.min(x+toothW*0.5, R);
+        const x2 = Math.min(x+toothW, R);
+        ctx.beginPath(); ctx.moveTo(x,T); ctx.lineTo(tip,T+toothH); ctx.lineTo(x2,T); ctx.closePath(); ctx.fill();
+        x += toothW;
+      }
+    }
+  }
+}
+function drawObject(o,i){
+  const selected = (i === selIdx);
+  switch(o.type){
+    case "spawn": drawSpawn(o); break;
+    case "exit": drawExit(o); break;
+    case "coin": drawCoin(o); break;
+    case "hazard": { const [cx,cy]=toScreen(o.x,o.y); drawHazardBody(cx,cy,o.radius,frame); break; }
+    case "wall": case "toggle_wall": {
+      const [cx,cy]=toScreen(o.x,o.y);
+      drawWallBody(cx,cy,o.length,effAngle(o,i));
+      break;
+    }
+    case "sweeper": drawSweeper(o,i); break;
+    case "deflector": drawDeflector(o,i,selected); break;
+    case "sliding_wall": {
+      drawSlideRailFor(o);
+      const [cx,cy]=slideBodyScreen(o,effPos(o,i));
+      drawWallBody(cx,cy,o.length,effAngle(o,i), selected?7:undefined);
+      break;
+    }
+    case "moving_wall": {
+      drawSlideRailFor(o);
+      const [cx,cy]=slideBodyScreen(o,effPos(o,i));
+      drawWallBody(cx,cy,o.length,effAngle(o,i));
+      break;
+    }
+    case "moving_hazard": {
+      drawSlideRailFor(o);
+      const [cx,cy]=slideBodyScreen(o,effPos(o,i));
+      drawHazardBody(cx,cy,o.radius,frame);
+      break;
+    }
+    case "launcher": drawLauncher(o,i,selected); break;
+  }
+}
+
+/* ---------- editor overlays ---------- */
+function objectReach(o){
+  if (o.type==="hazard"||o.type==="moving_hazard") return (o.radius||14)+5;
+  if (o.type==="deflector") return o.length/2 + 8;
+  if (BAR_TYPES.has(o.type)) return o.length/2;
+  return 10;
+}
+function drawOverlays(){
+  const showKill = el("ovKill").checked;
+  const showReach = el("ovReach").checked;
+  const showSnap = el("ovSnap").checked;
+  ctx.save();
+  ctx.lineWidth = 1;
+
+  if (showKill){
+    for (let i=0;i<level.objects.length;i++){
+      const o = level.objects[i];
+      if (o.type === "hazard"){
+        const [cx,cy]=toScreen(o.x,o.y);
+        killCircles(cx,cy,o.radius);
+      } else if (o.type === "moving_hazard"){
+        for (const pos of [0,1]){
+          const [cx,cy]=slideBodyScreen(o,pos);
+          killCircles(cx,cy,o.radius);
+        }
+      }
+    }
+  }
+  if (showReach){
+    for (const o of level.objects){
+      if (o.type !== "deflector") continue;
+      const [cx,cy]=toScreen(o.x,o.y);
+      ctx.strokeStyle = "rgba(30,80,200,.55)";
+      ctx.setLineDash([4,3]);
+      ctx.beginPath(); ctx.arc(cx,cy,o.length/2+8,0,7); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+  if (showSnap){
+    ctx.strokeStyle = "rgba(30,140,50,.6)";
+    for (let i=0;i<level.objects.length;i++){
+      const o = level.objects[i];
+      const pts = [];
+      if (BAR_TYPES.has(o.type)){
+        const [cx,cy] = bodyCenterScreen(o,i);
+        const [x1,y1,x2,y2] = barEndpointsScreen(cx,cy,o.length,effAngle(o,i));
+        pts.push([x1,y1],[x2,y2]);
+      }
+      if (SLIDE_TYPES.has(o.type)){
+        const [sx,sy]=toScreen(o.x,o.y);
+        const sp=slideSpan(o), r=rad(o.slideAngle||0);
+        pts.push([sx-Math.cos(r)*sp, sy-Math.sin(r)*sp],[sx+Math.cos(r)*sp, sy+Math.sin(r)*sp]);
+      }
+      for (const [px,py] of pts){
+        ctx.beginPath(); ctx.arc(px,py,CFG.JUNCTION_SNAP,0,7); ctx.stroke();
+      }
+    }
+  }
+  ctx.restore();
+}
+function killCircles(cx,cy,r){
+  ctx.strokeStyle = "rgba(200,30,30,.75)";
+  ctx.beginPath(); ctx.arc(cx,cy,r+5,0,7); ctx.stroke();
+  ctx.strokeStyle = "rgba(200,30,30,.22)";
+  ctx.beginPath(); ctx.arc(cx,cy,r+30,0,7); ctx.stroke();
+}
+function drawGrid(){
+  if (!el("ovGrid").checked) return;
+  ctx.save();
+  ctx.strokeStyle = "rgba(0,0,0,.07)";
+  ctx.lineWidth = 0.5;
+  for (let x=0;x<=400;x+=20){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,240); ctx.stroke(); }
+  for (let y=0;y<=240;y+=20){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(400,y); ctx.stroke(); }
+  ctx.strokeStyle = "rgba(0,0,0,.18)";
+  ctx.beginPath(); ctx.moveTo(200,0); ctx.lineTo(200,240); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0,120); ctx.lineTo(400,120); ctx.stroke();
+  ctx.restore();
+}
+function drawSelection(){
+  if (selIdx < 0 || selIdx >= level.objects.length) return;
+  const o = level.objects[selIdx];
+  const [cx,cy] = bodyCenterScreen(o,selIdx);
+  ctx.save();
+  // marching ants bounds
+  let hw=12, hh=12;
+  if (BAR_TYPES.has(o.type)){ hw = o.length/2+6; hh = hw; }
+  if (o.type==="hazard"||o.type==="moving_hazard"){ hw=hh=o.radius+6; }
+  ctx.strokeStyle = "rgba(216,129,0,.95)";
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4,3]);
+  ctx.lineDashOffset = -(frame%14)/2;
+  ctx.beginPath(); ctx.arc(cx,cy,Math.max(hw,hh),0,7); ctx.stroke();
+  ctx.setLineDash([]);
+  // rotation handle
+  const h = rotHandlePos(o,selIdx);
+  if (h){
+    ctx.strokeStyle = "rgba(216,129,0,.9)";
+    ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(h[0],h[1]); ctx.stroke();
+    ctx.fillStyle = "#d88100";
+    ctx.beginPath(); ctx.arc(h[0],h[1],4.5,0,7); ctx.fill();
+    ctx.strokeStyle = "#111";
+    ctx.beginPath(); ctx.arc(h[0],h[1],4.5,0,7); ctx.stroke();
+  }
+  // slide-angle handle (square at rail + end)
+  const sh = slideHandlePos(o);
+  if (sh){
+    ctx.fillStyle = "#d88100";
+    ctx.fillRect(sh[0]-3.5, sh[1]-3.5, 7, 7);
+    ctx.strokeStyle = "#111";
+    ctx.strokeRect(sh[0]-3.5, sh[1]-3.5, 7, 7);
+  }
+  ctx.restore();
+}
+function rotHandlePos(o,i){
+  if (!ANGLED.has(o.type)) return null;
+  const [cx,cy] = bodyCenterScreen(o,i);
+  const a = rad(effAngle(o,i));
+  const d = (o.type==="launcher") ? 32 : o.length/2 + 14;
+  return [cx+Math.cos(a)*d, cy+Math.sin(a)*d];
+}
+function slideHandlePos(o){
+  if (!SLIDE_TYPES.has(o.type)) return null;
+  const [sx,sy] = toScreen(o.x,o.y);
+  const sp = slideSpan(o)+11, r = rad(o.slideAngle||0);
+  return [sx+Math.cos(r)*sp, sy+Math.sin(r)*sp];
+}
+
+/* ---------- render loop ---------- */
+function render(){
+  ctx.setTransform(2,0,0,2,0,0);
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0,0,400,240);
+  drawGrid();
+  drawArena(level.ceiling);
+  for (let i=0;i<level.objects.length;i++) drawObject(level.objects[i], i);
+  drawOverlays();
+  if (!playing) drawSelection();
+}
+let acc = 0, lastT = 0;
+function loop(t){
+  if (!lastT) lastT = t;
+  acc += (t-lastT)/1000; lastT = t;
+  if (acc > 0.5) acc = 0.5;
+  const stepDt = 1/CFG.FPS;
+  while (acc >= stepDt){
+    acc -= stepDt;
+    frame++;
+    if (testing && testSim){
+      testSim.handleCrank(consumeCrank());
+      testSim.update();
+    } else if (playing) stepMovers();
+  }
+  if (testing && testSim) drawSim(testSim);
+  else render();
+  requestAnimationFrame(loop);
+}
+
+/* ---------- play mode (step() ports) ---------- */
+function startPlay(){
+  runtime = level.objects.map(o=>{
+    if (o.type==="sweeper")
+      return {angle:o.angle||0, dir:1, speed:CFG.SWEEPER_SPEEDS[o.speed]||CFG.SWEEPER_SPEEDS.M};
+    if (o.type==="toggle_wall")
+      return {angle:(((o.angle||0)%360)+360)%360, base:o.angle||0, k:0, timer:0,
+              interval:CFG.TOGGLE_INTERVALS[o.speed]||CFG.TOGGLE_INTERVALS.M, step:o.angleStep??45};
+    if (o.type==="moving_wall"||o.type==="moving_hazard")
+      return {pos:o.objectPosition, dir:(o.objectPosition >= 1-0.001)?-1:1,
+              speed:CFG.MOVING_SPEEDS[o.speed]||CFG.MOVING_SPEEDS.M};
+    return {};
+  });
+  playing = true;
+  el("btnPlay").innerHTML = "&#9632; Stop";
+  el("btnPlay").classList.add("active");
+  el("stMode").textContent = "MOVERS — autonomous objects animating (editing paused)";
+}
+function stopPlay(){
+  if (testing) stopTest();
+  if (!playing) return;
+  playing = false; runtime = null;
+  el("btnPlay").innerHTML = "&#9654; Movers";
+  el("btnPlay").classList.remove("active");
+  el("stMode").textContent = "";
+}
+function stepMovers(){
+  for (let i=0;i<level.objects.length;i++){
+    const o = level.objects[i], rt = runtime[i];
+    if (o.type==="sweeper"){
+      rt.angle += rt.dir*rt.speed;
+      const mn = o.minAngle??0, mx = o.maxAngle??90;
+      if (rt.angle >= mx){ rt.angle = mx; rt.dir = -1; }
+      else if (rt.angle <= mn){ rt.angle = mn; rt.dir = 1; }
+    } else if (o.type==="toggle_wall"){
+      rt.timer++;
+      if (rt.timer >= rt.interval){
+        rt.timer = 0; rt.k++;
+        rt.angle = (((rt.base + rt.k*rt.step)%360)+360)%360;
+      }
+    } else if (o.type==="moving_wall"||o.type==="moving_hazard"){
+      rt.pos += rt.dir*rt.speed;
+      if (rt.pos >= 1){ rt.pos = 1; rt.dir = -1; }
+      else if (rt.pos <= 0){ rt.pos = 0; rt.dir = 1; }
+    }
+  }
+}
+
+/* ---------- TEST MODE (gameplay simulation) ---------- */
+let testing = false, testSim = null;
+let wheelAccum = 0;
+const testKeys = new Set();
+const KEY_CRANK_DEG = 9, KEY_CRANK_FINE = 3;
+
+function startTest(){
+  const crank = level.objects.filter(o=>CRANKABLE.has(o.type)).length;
+  if (crank > 3){
+    alert("Can't test: "+crank+" crankables (deflector + sliding wall + launcher). The game asserts a max of 3.");
+    return;
+  }
+  stopPlay();           // also stops any previous test
+  setArmed(null);
+  selIdx = -1; refreshSel();
+  testSim = createClingSim(deepCopy(level));
+  testing = true;
+  wheelAccum = 0; testKeys.clear();
+  el("btnTest").innerHTML = "&#9632; Stop test";
+  el("btnTest").classList.add("active");
+  el("stMode").innerHTML = "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>&#8593;</b> CLING/FIRE &nbsp;<b>&#8595;</b> drop &nbsp;<b>Tab</b> cycle &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit";
+  cv.style.cursor = "default";
+  cv.focus && cv.focus();
+}
+function stopTest(){
+  if (!testing) return;
+  testing = false; testSim = null;
+  testKeys.clear(); wheelAccum = 0;
+  el("btnTest").innerHTML = "&#127918; Test";
+  el("btnTest").classList.remove("active");
+  el("stMode").textContent = "";
+  cv.style.cursor = "crosshair";
+}
+function consumeCrank(){
+  let c = 0;
+  const fine = testKeys.has("Shift");
+  const rate = fine ? KEY_CRANK_FINE : KEY_CRANK_DEG;
+  if (testKeys.has("ArrowRight") || testKeys.has("d")) c += rate;
+  if (testKeys.has("ArrowLeft") || testKeys.has("a")) c -= rate;
+  if (wheelAccum !== 0){
+    const take = Math.max(-40, Math.min(40, wheelAccum));
+    wheelAccum -= take;
+    if (Math.abs(wheelAccum) < 0.01) wheelAccum = 0;
+    c += take;
+  }
+  return c;
+}
+cv.addEventListener("wheel", e=>{
+  if (!testing) return;
+  e.preventDefault();
+  wheelAccum += e.deltaY * 0.35;
+  if (wheelAccum > 240) wheelAccum = 240;
+  if (wheelAccum < -240) wheelAccum = -240;
+}, {passive:false});
+
+window.addEventListener("keyup", e=>{
+  testKeys.delete(e.key);
+  testKeys.delete(e.key.toLowerCase());
+});
+window.addEventListener("blur", ()=>testKeys.clear());
+
+/* ---------- test-mode drawing (ports of game.drawGame + clingball.draw) --- */
+function drawSelectionHighlightS(cx,cy,frameCount){
+  for (const offset of [0,15]){
+    const progress = (frameCount + offset) % 30;
+    const t = progress/30;
+    const radius = 5 + t*15;
+    const lw = Math.max(1, Math.floor(3 - t*2 + 0.5));
+    const alpha = 0.3 + t*0.55;
+    ctx.strokeStyle = dither(alpha);
+    ctx.lineWidth = lw;
+    ctx.beginPath(); ctx.arc(cx,cy,Math.floor(radius+0.5),0,7); ctx.stroke();
+  }
+  ctx.lineWidth = 1;
+}
+function drawSim(sim){
+  ctx.setTransform(2,0,0,2,0,0);
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0,0,400,240);
+  const g = sim.game, ball = sim.ball;
+  drawArena(g.arenaCeiling);
+
+  const sel = g.crankTargets[g.selIndex];
+  const docked = sim.isDocked() ? ball.dockedLauncher : null;
+  for (const obj of sim.objects){
+    let isSelected = !!(sel && sel.kind === "object" && sel.obj === obj);
+    if (docked === obj) isSelected = true;
+    switch(obj.type){
+      case "spawn": drawSpawnAtS(obj.x, obj.y); break;
+      case "exit": drawExitAtS(obj.x, obj.y); break;
+      case "coin": if (!obj.collected) drawCoinAtS(obj.x, obj.y); break;
+      case "hazard": drawHazardBody(obj.x, obj.y, obj.radius, frame); break;
+      case "wall": case "toggle_wall":
+        drawWallBody(obj.x, obj.y, obj.length, obj.angle); break;
+      case "sweeper": drawSweeperAtS(obj.x, obj.y, obj.length, obj.angle); break;
+      case "deflector": drawDeflectorAtS(obj.x, obj.y, obj.length, obj.angle, isSelected); break;
+      case "sliding_wall": {
+        drawSlideRailAtS(obj.x, obj.y, obj.slideAngle, obj.minSlide, obj.maxSlide);
+        const [cx,cy] = slideCenterOfSim(obj);
+        drawWallBody(cx, cy, obj.length, obj.angle, isSelected ? 7 : undefined);
+        break;
+      }
+      case "moving_wall": {
+        drawSlideRailAtS(obj.x, obj.y, obj.slideAngle, obj.minSlide, obj.maxSlide);
+        const [cx,cy] = slideCenterOfSim(obj);
+        drawWallBody(cx, cy, obj.length, obj.angle);
+        break;
+      }
+      case "moving_hazard": {
+        drawSlideRailAtS(obj.x, obj.y, obj.slideAngle, obj.minSlide, obj.maxSlide);
+        const [cx,cy] = slideCenterOfSim(obj);
+        drawHazardBody(cx, cy, obj.radius, frame);
+        break;
+      }
+      case "launcher": drawLauncherAtS(obj.x, obj.y, obj.angle, isSelected); break;
+    }
+  }
+
+  // Ball (+ selection highlight when CLING is the crank target)
+  const [bx,by] = sim.worldPos();
+  const ballSelected = sel && sel.kind === "ball"
+    && !sim.isDocked() && !sim.isInFlight() && !sim.isFalling();
+  if (ballSelected) drawSelectionHighlightS(bx, by, g.frameCount);
+  const flashHide = ball.respawnFlash > 0 && (ball.frameCount % 2) === 0;
+  if (!flashHide){
+    ctx.fillStyle = INK;
+    ctx.beginPath(); ctx.arc(bx,by,SIM.BALL_RADIUS,0,7); ctx.fill();
+    ctx.strokeStyle = INK; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.arc(bx,by,SIM.BALL_RADIUS+1,0,7); ctx.stroke();
+  }
+
+  // HUD
+  ctx.fillStyle = INK;
+  ctx.font = "bold 9px ui-monospace, Menlo, Consolas, monospace";
+  ctx.textAlign = "left"; ctx.textBaseline = "top";
+  ctx.fillText(`COINS ${g.coinsCollected}/${sim.totalCoins}`, 6, 5);
+  ctx.fillText("R: RESTART", 6, 17);
+  ctx.textAlign = "right";
+  ctx.fillText(sim.selectionLabel(), 394, 5);
+  ctx.textAlign = "left";
+
+  // Tutorial bar
+  if (g.tutorial && !g.levelComplete){
+    ctx.fillStyle = INK;
+    ctx.fillRect(0, 224, 400, 16);
+    ctx.fillStyle = "#fff";
+    ctx.textAlign = "center";
+    ctx.fillText(g.tutorial, 200, 228);
+    ctx.textAlign = "left";
+  }
+
+  // CLEAR overlay
+  if (g.levelComplete){
+    ctx.fillStyle = "rgba(255,255,255,.75)";
+    ctx.fillRect(0, 84, 400, 76);
+    ctx.fillStyle = INK;
+    ctx.textAlign = "center";
+    ctx.font = "bold 22px ui-monospace, Menlo, Consolas, monospace";
+    ctx.fillText("CLEAR", 200, 96);
+    ctx.font = "bold 11px ui-monospace, Menlo, Consolas, monospace";
+    ctx.fillText("SCORE " + g.lastLevelScore, 200, 124);
+    ctx.font = "9px ui-monospace, Menlo, Consolas, monospace";
+    ctx.fillText("R restart · Esc back to editor", 200, 140);
+    ctx.textAlign = "left";
+  }
+}
+function slideCenterOfSim(o){
+  const span = o.maxSlide - o.minSlide;
+  const pix = span <= 0 ? o.minSlide : o.minSlide + o.objectPosition*span;
+  const r = rad(o.slideAngle);
+  return [o.x + Math.cos(r)*pix, o.y + Math.sin(r)*pix];
+}
+
+
+/* ---------- hit testing (screen space) ---------- */
+function distToSeg(px,py,x1,y1,x2,y2){
+  const dx=x2-x1, dy=y2-y1;
+  const L2 = dx*dx+dy*dy;
+  let t = L2 ? ((px-x1)*dx+(py-y1)*dy)/L2 : 0;
+  t = Math.max(0,Math.min(1,t));
+  const qx=x1+dx*t, qy=y1+dy*t;
+  return Math.hypot(px-qx,py-qy);
+}
+function hitTest(sx,sy){
+  // handles first (selected object)
+  if (selIdx >= 0 && selIdx < level.objects.length){
+    const o = level.objects[selIdx];
+    const rh = rotHandlePos(o,selIdx);
+    if (rh && Math.hypot(sx-rh[0],sy-rh[1]) <= 7) return {mode:"rotate", idx:selIdx};
+    const sh = slideHandlePos(o);
+    if (sh && Math.hypot(sx-sh[0],sy-sh[1]) <= 7) return {mode:"slideangle", idx:selIdx};
+  }
+  for (let i=level.objects.length-1; i>=0; i--){
+    const o = level.objects[i];
+    const [cx,cy] = bodyCenterScreen(o,i);
+    let hit = false;
+    if (o.type==="spawn") hit = Math.hypot(sx-cx,sy-cy) <= 10;
+    else if (o.type==="exit") hit = Math.abs(sx-cx)<=11 && Math.abs(sy-cy)<=13;
+    else if (o.type==="coin") hit = Math.hypot(sx-cx,sy-cy) <= 8;
+    else if (o.type==="hazard"||o.type==="moving_hazard") hit = Math.hypot(sx-cx,sy-cy) <= Math.max(8,o.radius);
+    else if (o.type==="launcher") hit = Math.hypot(sx-cx,sy-cy) <= 16;
+    else if (BAR_TYPES.has(o.type)){
+      const [x1,y1,x2,y2] = barEndpointsScreen(cx,cy,o.length,effAngle(o,i));
+      const hw = (o.type==="deflector"||o.type==="sliding_wall") ? CFG.BAR_WIDTH/2+2 : 6;
+      hit = distToSeg(sx,sy,x1,y1,x2,y2) <= hw;
+    }
+    if (hit) return {mode:"move", idx:i};
+  }
+  return null;
+}
+
+/* ---------- mutations, undo/redo, persistence ---------- */
+function deepCopy(v){ return JSON.parse(JSON.stringify(v)); }
+function snapshot(){ return {level: deepCopy(level), selIdx}; }
+function pushUndo(){
+  undoStack.push(snapshot());
+  if (undoStack.length > 120) undoStack.shift();
+  redoStack.length = 0;
+}
+function applySnap(s){
+  level = deepCopy(s.level); selIdx = s.selIdx;
+  syncLevelPanel(); refreshAll();
+}
+function undo(){ if(!undoStack.length) return; stopPlay(); redoStack.push(snapshot()); applySnap(undoStack.pop()); }
+function redo(){ if(!redoStack.length) return; stopPlay(); undoStack.push(snapshot()); applySnap(redoStack.pop()); }
+function saveLocal(){
+  try{ localStorage.setItem("cling-editor-autosave", JSON.stringify(level)); }catch(e){}
+}
+function loadLocal(){
+  try{
+    const s = localStorage.getItem("cling-editor-autosave");
+    if (s){ const l = JSON.parse(s); if (l && Array.isArray(l.objects)){ level = l; return true; } }
+  }catch(e){}
+  return false;
+}
+function commit(){ saveLocal(); refreshAll(); }
+
+/* ---------- validation ---------- */
+function validate(){
+  const errs = [], warns = [];
+  const objs = level.objects;
+  const crank = objs.filter(o=>CRANKABLE.has(o.type)).length;
+  if (crank > 3) errs.push(`Too many crankables: ${crank} (deflector + sliding wall + launcher must be ≤ 3 — the game asserts).`);
+  const spawns = objs.filter(o=>o.type==="spawn").length;
+  if (spawns !== 1) errs.push(spawns===0 ? "No spawn — exactly one is required." : `Multiple spawns (${spawns}) — exactly one is required.`);
+  const exits = objs.filter(o=>o.type==="exit");
+  if (exits.length === 0) errs.push("No exit — at least one is required.");
+  exits.forEach((o,k)=>{
+    const onPerim = Math.abs(Math.abs(o.x)-180)<=2 || Math.abs(Math.abs(o.y)-100)<=2;
+    const inside = Math.abs(o.x)<=182 && Math.abs(o.y)<=102;
+    if (!onPerim || !inside) warns.push(`Exit at (${fmtNum(o.x)}, ${fmtNum(o.y)}) is not on the arena perimeter (x=±180 or y=±100).`);
+  });
+  objs.forEach((o,i)=>{
+    const reach = objectReach(o) + (SLIDE_TYPES.has(o.type) ? slideSpan(o) : 0);
+    if (Math.abs(o.x) > 180 + reach || Math.abs(o.y) > 100 + reach)
+      warns.push(`#${i+1} ${o.type} at (${fmtNum(o.x)}, ${fmtNum(o.y)}) sits outside the arena beyond its reach.`);
+  });
+  return {errs, warns};
+}
+function renderWarnings(){
+  const {errs, warns} = validate();
+  const box = el("warnList");
+  box.innerHTML = "";
+  if (!errs.length && !warns.length){
+    box.innerHTML = '<div class="warn-item ok">All checks pass.</div>';
+    return;
+  }
+  for (const e of errs){ const d=document.createElement("div"); d.className="warn-item err"; d.textContent=e; box.appendChild(d); }
+  for (const w of warns){ const d=document.createElement("div"); d.className="warn-item"; d.textContent=w; box.appendChild(d); }
+}
+
+/* ---------- properties panel ---------- */
+function el(id){ return document.getElementById(id); }
+function propNum(label, key, o, opts={}){
+  const row = document.createElement("div"); row.className="prop-row";
+  const lab = document.createElement("label"); lab.textContent = label;
+  const inp = document.createElement("input"); inp.type="number";
+  inp.step = opts.step ?? 1;
+  if (opts.min !== undefined) inp.min = opts.min;
+  if (opts.max !== undefined) inp.max = opts.max;
+  inp.value = fmtNum(o[key] ?? 0);
+  inp.addEventListener("change", ()=>{
+    stopPlay(); pushUndo();
+    let v = parseFloat(inp.value);
+    if (!isFinite(v)) v = 0;
+    if (opts.clamp) v = Math.max(opts.clamp[0], Math.min(opts.clamp[1], v));
+    o[key] = v;
+    inp.value = fmtNum(v);
+    commit();
+  });
+  row.append(lab, inp);
+  if (opts.after) row.append(opts.after);
+  return row;
+}
+function segControl(options, current, onPick, labeler){
+  const wrap = document.createElement("div"); wrap.className="seg";
+  for (const opt of options){
+    const b = document.createElement("button");
+    b.textContent = labeler ? labeler(opt) : opt;
+    if (opt === current) b.classList.add("on");
+    b.addEventListener("click", ()=>{ onPick(opt); });
+    wrap.appendChild(b);
+  }
+  return wrap;
+}
+function propSeg(label, key, o, options, applyFn){
+  const row = document.createElement("div"); row.className="prop-row";
+  const lab = document.createElement("label"); lab.textContent = label;
+  row.append(lab, segControl(options, o[key], (opt)=>{
+    stopPlay(); pushUndo();
+    if (applyFn) applyFn(opt); else o[key] = opt;
+    commit(); renderProps();
+  }));
+  return row;
+}
+function renderProps(){
+  const box = el("props");
+  box.innerHTML = "";
+  if (selIdx < 0 || selIdx >= level.objects.length){
+    box.innerHTML = '<div class="muted">Select an object.</div>';
+    el("stSel").textContent = "nothing selected";
+    return;
+  }
+  const o = level.objects[selIdx];
+  el("stSel").textContent = `#${selIdx+1} ${o.type}`;
+  const title = document.createElement("div");
+  title.innerHTML = `<b>${o.type}</b> <span class="muted">#${selIdx+1}</span>`;
+  title.style.marginBottom = "4px";
+  box.appendChild(title);
+
+  box.appendChild(propNum("x (center)", "x", o, {step:5}));
+  box.appendChild(propNum("y (center, +up)", "y", o, {step:5}));
+
+  const t = o.type;
+  if (t==="hazard" || t==="moving_hazard")
+    box.appendChild(propNum("radius", "radius", o, {min:2}));
+  if (BAR_TYPES.has(t)){
+    const tbl = (t==="deflector") ? CFG.DEFLECTOR_SIZES : CFG.WALL_SIZES;
+    const row = document.createElement("div"); row.className="prop-row";
+    const lab = document.createElement("label"); lab.textContent="length";
+    const inp = document.createElement("input"); inp.type="number"; inp.min=10; inp.value=fmtNum(o.length);
+    inp.addEventListener("change", ()=>{
+      stopPlay(); pushUndo();
+      o.length = Math.max(10, parseFloat(inp.value)||tbl.M);
+      commit();
+    });
+    row.append(lab, inp, segControl(["S","M","L"], letterOfLength(o.length,tbl), (L)=>{
+      stopPlay(); pushUndo(); o.length = tbl[L]; commit(); renderProps();
+    }, L=>`${L}·${tbl[L]}`));
+    box.appendChild(row);
+  }
+  if (ANGLED.has(t))
+    box.appendChild(propNum("angle °", "angle", o, {step:15}));
+  if (t==="sweeper"){
+    box.appendChild(propNum("minAngle °", "minAngle", o, {step:5}));
+    box.appendChild(propNum("maxAngle °", "maxAngle", o, {step:5}));
+  }
+  if (t==="toggle_wall")
+    box.appendChild(propNum("angleStep °", "angleStep", o, {step:15}));
+  if (SLIDE_TYPES.has(t)){
+    box.appendChild(propNum("slideAngle °", "slideAngle", o, {step:15}));
+    box.appendChild(propSeg("slideRange", "slideRange", o, ["S","M","L"]));
+    const row = document.createElement("div"); row.className="prop-row";
+    const lab = document.createElement("label"); lab.textContent="objectPosition";
+    const rng = document.createElement("input"); rng.type="range"; rng.min=0; rng.max=1; rng.step=0.05; rng.value=o.objectPosition;
+    const num = document.createElement("input"); num.type="number"; num.min=0; num.max=1; num.step=0.05; num.value=o.objectPosition; num.style.width="55px";
+    let posUndoArmed = true;
+    const setPos = v=>{
+      v = Math.max(0,Math.min(1, isFinite(v)?v:0.5));
+      if (posUndoArmed){ stopPlay(); pushUndo(); posUndoArmed=false; setTimeout(()=>posUndoArmed=true, 800); }
+      o.objectPosition = v; rng.value=v; num.value=v; saveLocal(); renderWarnings(); renderList();
+    };
+    rng.addEventListener("input", ()=>setPos(parseFloat(rng.value)));
+    num.addEventListener("change", ()=>setPos(parseFloat(num.value)));
+    row.append(lab, rng, num);
+    box.appendChild(row);
+  }
+  if (t==="sweeper" || t==="toggle_wall" || t==="moving_wall" || t==="moving_hazard"){
+    const tbl = t==="sweeper" ? CFG.SWEEPER_SPEEDS : t==="toggle_wall" ? CFG.TOGGLE_INTERVALS : CFG.MOVING_SPEEDS;
+    const unit = t==="toggle_wall" ? "f" : "";
+    box.appendChild(propSeg("speed", "speed", o, ["S","M","F"], null));
+    const hint = document.createElement("div"); hint.className="hint";
+    hint.textContent = t==="toggle_wall"
+      ? `interval: S=${tbl.S} M=${tbl.M} F=${tbl.F} frames`
+      : `S=${tbl.S} M=${tbl.M} F=${tbl.F}${unit}`;
+    box.appendChild(hint);
+  }
+  if (o._extra){
+    const d = document.createElement("div"); d.className="hint";
+    d.textContent = "extra params kept for round-trip: " + Object.keys(o._extra).join(", ");
+    box.appendChild(d);
+  }
+  // actions
+  const act = document.createElement("div"); act.className="prop-row"; act.style.marginTop="8px";
+  const bd = document.createElement("button"); bd.textContent="Duplicate";
+  bd.addEventListener("click", ()=>duplicateSel());
+  const bx = document.createElement("button"); bx.textContent="Delete";
+  bx.addEventListener("click", ()=>deleteSel());
+  act.append(bd,bx);
+  box.appendChild(act);
+}
+function letterOfLength(len, tbl){
+  for (const k of ["S","M","L"]) if (tbl[k]===len) return k;
+  return null;
+}
+
+/* ---------- object list ---------- */
+function renderList(){
+  const ul = el("objList");
+  ul.innerHTML = "";
+  el("objCount").textContent = `(${level.objects.length})`;
+  level.objects.forEach((o,i)=>{
+    const li = document.createElement("li");
+    li.draggable = true;
+    if (i===selIdx) li.classList.add("sel");
+    li.innerHTML = `<span class="idx">${i+1}</span><span class="typ">${o.type}</span><span class="pos">${fmtNum(o.x)}, ${fmtNum(o.y)}</span>`;
+    li.addEventListener("click", ()=>{ selIdx = i; refreshSel(); });
+    li.addEventListener("dragstart", e=>{ e.dataTransfer.setData("text/plain", String(i)); });
+    li.addEventListener("dragover", e=>{ e.preventDefault(); li.classList.add("dragover"); });
+    li.addEventListener("dragleave", ()=>li.classList.remove("dragover"));
+    li.addEventListener("drop", e=>{
+      e.preventDefault(); li.classList.remove("dragover");
+      const from = parseInt(e.dataTransfer.getData("text/plain"),10);
+      if (isNaN(from) || from===i) return;
+      stopPlay(); pushUndo();
+      const [moved] = level.objects.splice(from,1);
+      level.objects.splice(i,0,moved);
+      selIdx = i;
+      commit();
+    });
+    ul.appendChild(li);
+  });
+}
+
+/* ---------- selection helpers ---------- */
+function refreshSel(){ renderProps(); renderList(); }
+function refreshAll(){ renderProps(); renderList(); renderWarnings(); }
+function duplicateSel(){
+  if (selIdx<0) return;
+  stopPlay(); pushUndo();
+  const c = deepCopy(level.objects[selIdx]);
+  c.x += 10; c.y -= 10;
+  level.objects.splice(selIdx+1, 0, c);
+  selIdx = selIdx+1;
+  commit();
+}
+function deleteSel(){
+  if (selIdx<0) return;
+  stopPlay(); pushUndo();
+  level.objects.splice(selIdx,1);
+  selIdx = -1;
+  commit();
+}
+
+/* ---------- mouse interaction ---------- */
+function canvasScreenPos(e){
+  const r = cv.getBoundingClientRect();
+  return [(e.clientX-r.left)/2, (e.clientY-r.top)/2]; // 2× scale
+}
+const snapV = (v, fine)=> Math.round(v / (fine?1:5)) * (fine?1:5);
+const snapA = (a, fine)=> { const s = fine?1:15; return ((Math.round(a/s)*s)%360+360)%360; };
+
+cv.addEventListener("mousedown", e=>{
+  if (testing) return;                 // test mode: canvas is the game screen
+  const [sx,sy] = canvasScreenPos(e);
+  if (playing) stopPlay();
+  if (armedTool){
+    const [cxx,cyy] = toCenter(sx,sy);
+    pushUndo();
+    const o = newObject(armedTool, snapV(cxx, e.shiftKey), snapV(cyy, e.shiftKey));
+    level.objects.push(o);
+    selIdx = level.objects.length-1;
+    setArmed(null);
+    commit();
+    return;
+  }
+  const hit = hitTest(sx,sy);
+  if (!hit){ selIdx = -1; refreshSel(); return; }
+  selIdx = hit.idx;
+  const o = level.objects[selIdx];
+  if (hit.mode === "move"){
+    drag = {mode:"move", idx:hit.idx, startSX:sx, startSY:sy, origX:o.x, origY:o.y, moved:false};
+  } else if (hit.mode === "rotate"){
+    drag = {mode:"rotate", idx:hit.idx, origAngle:o.angle||0, moved:false};
+  } else if (hit.mode === "slideangle"){
+    drag = {mode:"slideangle", idx:hit.idx, origAngle:o.slideAngle||0, moved:false};
+  }
+  refreshSel();
+});
+window.addEventListener("mousemove", e=>{
+  const [sx,sy] = canvasScreenPos(e);
+  const [ccx,ccy] = toCenter(sx,sy);
+  if (sx>=0 && sx<=400 && sy>=0 && sy<=240)
+    el("stCursor").textContent = `${Math.round(ccx)}, ${Math.round(ccy)}`;
+  if (!drag) return;
+  const o = level.objects[drag.idx];
+  if (!o){ drag = null; return; }
+  if (!drag.moved){ drag.moved = true; pushUndo(); }
+  if (drag.mode === "move"){
+    const dx = sx - drag.startSX, dy = sy - drag.startSY;
+    o.x = snapV(drag.origX + dx, e.shiftKey);
+    o.y = snapV(drag.origY - dy, e.shiftKey);   // screen dy → center-origin −dy
+    renderList(); renderPropsSoft();
+  } else if (drag.mode === "rotate"){
+    const [cx,cy] = bodyCenterScreen(o, drag.idx);
+    const a = Math.atan2(sy-cy, sx-cx)*180/Math.PI;
+    o.angle = snapA(a, e.shiftKey);
+    renderPropsSoft();
+  } else if (drag.mode === "slideangle"){
+    const [cx,cy] = toScreen(o.x,o.y);
+    const a = Math.atan2(sy-cy, sx-cx)*180/Math.PI;
+    o.slideAngle = snapA(a, e.shiftKey);
+    renderPropsSoft();
+  }
+  renderWarnings();
+});
+window.addEventListener("mouseup", ()=>{
+  if (drag && drag.moved) saveLocal();
+  drag = null;
+});
+/* light-weight prop refresh during drags (rebuild only values) */
+let propsSoftTimer = 0;
+function renderPropsSoft(){
+  const now = performance.now();
+  if (now - propsSoftTimer < 80) return;
+  propsSoftTimer = now;
+  renderProps();
+}
+
+/* ---------- palette ---------- */
+function setArmed(t){
+  armedTool = t;
+  document.querySelectorAll(".pal-btn").forEach(b=>{
+    b.classList.toggle("armed", b.dataset.type === t);
+  });
+  cv.style.cursor = t ? "copy" : "crosshair";
+  el("stMode").textContent = t ? `placing: ${t} — click the arena` : (playing?"PLAY":"");
+}
+document.querySelectorAll(".pal-btn").forEach(b=>{
+  b.addEventListener("click", ()=>{
+    stopPlay();
+    setArmed(armedTool === b.dataset.type ? null : b.dataset.type);
+  });
+});
+
+/* ---------- keyboard ---------- */
+window.addEventListener("keydown", e=>{
+  const tag = (e.target.tagName||"").toLowerCase();
+  if (tag==="input" || tag==="textarea" || tag==="select") return;
+  if (testing && testSim){
+    if (e.key === "Shift"){ testKeys.add("Shift"); return; }
+    switch(e.key){
+      case "ArrowLeft": case "ArrowRight":
+        e.preventDefault(); testKeys.add(e.key); return;
+      case "a": case "d": case "A": case "D":
+        e.preventDefault(); testKeys.add(e.key.toLowerCase()); return;
+      case "ArrowUp": case " ":
+        e.preventDefault(); testSim.selectCling(); return;
+      case "ArrowDown": case "s": case "S":
+        e.preventDefault();
+        if (!testSim.game.levelComplete) testSim.tryDrop();
+        return;
+      case "Tab":
+        e.preventDefault(); testSim.cycleObjects(e.shiftKey ? -1 : 1); return;
+      case "q": case "Q":
+        testSim.cycleObjects(-1); return;
+      case "e": case "E":
+        testSim.cycleObjects(1); return;
+      case "r": case "R":
+        testSim.restartLevel(); return;
+      case "Escape":
+        stopTest(); return;
+    }
+    return;
+  }
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase()==="z"){
+    e.preventDefault();
+    if (e.shiftKey) redo(); else undo();
+    return;
+  }
+  if (mod && e.key.toLowerCase()==="d"){
+    e.preventDefault(); duplicateSel(); return;
+  }
+  if (e.key==="Escape"){
+    if (armedTool) setArmed(null);
+    else { selIdx=-1; refreshSel(); }
+    return;
+  }
+  if (e.key==="Delete" || e.key==="Backspace"){
+    if (selIdx>=0){ e.preventDefault(); deleteSel(); }
+    return;
+  }
+  const step = e.shiftKey ? 1 : 5;
+  let dx=0, dy=0;
+  if (e.key==="ArrowLeft") dx=-step;
+  else if (e.key==="ArrowRight") dx=step;
+  else if (e.key==="ArrowUp") dy=step;      // center-origin Y-up
+  else if (e.key==="ArrowDown") dy=-step;
+  else return;
+  if (selIdx<0) return;
+  e.preventDefault();
+  stopPlay(); pushUndo();
+  const o = level.objects[selIdx];
+  o.x += dx; o.y += dy;
+  commit();
+});
+
+/* ---------- level meta panel ---------- */
+function syncLevelPanel(){
+  el("lvName").value = level.name || "";
+  el("lvTheme").value = level.theme || "";
+  el("lvCeiling").value = level.ceiling || "solid";
+  el("lvTutorial").value = level.tutorial || "";
+}
+function bindMeta(id, key){
+  el(id).addEventListener("change", ()=>{
+    pushUndo();
+    level[key] = el(id).value;
+    commit();
+  });
+}
+bindMeta("lvName","name"); bindMeta("lvTheme","theme"); bindMeta("lvTutorial","tutorial");
+el("lvCeiling").addEventListener("change", ()=>{ pushUndo(); level.ceiling = el("lvCeiling").value; commit(); });
+
+/* ---------- top-bar buttons ---------- */
+el("btnPlay").addEventListener("click", ()=>{
+  if (testing) stopTest();
+  playing ? stopPlay() : (setArmed(null), startPlay());
+});
+el("btnTest").addEventListener("click", ()=>{
+  testing ? stopTest() : startTest();
+});
+el("btnNew").addEventListener("click", ()=>{
+  if (!confirm("Start a new empty level? (current level stays in undo history)")) return;
+  stopPlay(); pushUndo();
+  level = {name:"Untitled", theme:"Roll", ceiling:"solid", tutorial:"", objects:[
+    newObject("spawn", -160, -100),
+    newObject("exit", 180, -100),
+  ]};
+  selIdx = -1;
+  syncLevelPanel(); commit();
+});
+el("btnIO").addEventListener("click", ()=>{
+  el("ioDrawer").classList.toggle("open");
+});
+el("btnCloseIO").addEventListener("click", ()=> el("ioDrawer").classList.remove("open"));
+el("btnExport").addEventListener("click", ()=>{
+  el("ioText").value = exportLevel(level);
+  ioMsg("Exported. Paste into levels.lua.", false);
+});
+el("btnCopy").addEventListener("click", async ()=>{
+  const t = el("ioText");
+  if (!t.value) t.value = exportLevel(level);
+  try{
+    await navigator.clipboard.writeText(t.value);
+    ioMsg("Copied to clipboard.", false);
+  }catch(err){
+    t.select(); document.execCommand("copy");
+    ioMsg("Copied (fallback).", false);
+  }
+});
+el("btnImport").addEventListener("click", ()=>{
+  try{
+    const {level: lv, notes} = importLevelFromLua(el("ioText").value);
+    stopPlay(); pushUndo();
+    level = lv; selIdx = -1;
+    syncLevelPanel(); commit();
+    ioMsg("Imported \""+lv.name+"\" — "+lv.objects.length+" objects." + (notes.length? " "+notes.join(" ") : ""), false);
+  }catch(err){
+    ioMsg(err.message, true);
+  }
+});
+function ioMsg(msg, isErr){
+  const m = el("ioMsg");
+  m.textContent = msg;
+  m.className = isErr ? "err" : "ok";
+}
+
+/* ---------- built-in level loader ---------- */
+(function(){
+  const sel = el("lvLoad");
+  for (const it of BUILTIN_LEVELS){
+    const opt = document.createElement("option");
+    opt.value = String(it.n);
+    opt.textContent = `L${it.n} · ${it.name}` + (it.theme ? `  (${it.theme})` : "");
+    sel.appendChild(opt);
+  }
+  sel.addEventListener("change", ()=>{
+    const n = parseInt(sel.value, 10);
+    sel.value = "";                       // re-arm so the same level can be re-picked
+    if (!n) return;
+    const it = BUILTIN_LEVELS.find(x=>x.n===n);
+    if (!it) return;
+    try{
+      const {level: lv} = importLevelFromLua(it.lua);
+      stopPlay(); setArmed(null); pushUndo();
+      level = lv; selIdx = -1;
+      syncLevelPanel(); commit();
+      el("stMode").textContent = `loaded built-in L${n} "${lv.name}" — previous level is in undo history`;
+    }catch(err){
+      alert("Failed to load built-in level: " + err.message);
+    }
+  });
+})();
+
+/* overlay toggles redraw automatically via rAF; nothing to bind */
+
+/* ---------- boot ---------- */
+if (!loadLocal()){
+  level = {name:"Untitled", theme:"Roll", ceiling:"solid", tutorial:"", objects:[
+    newObject("spawn", -160, -100),
+    newObject("exit", 180, -100),
+  ]};
+}
+syncLevelPanel();
+refreshAll();
+requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
