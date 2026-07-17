@@ -227,6 +227,7 @@ const CFG = {
   WALL_LINE_WIDTH:5,
   ARENA_INSET:20,
   BAR_WIDTH:16,
+  WALL_WIDTH:12,
   JUNCTION_SNAP:16,
   WALL_SIZES:{S:50,M:70,L:100},
   DEFLECTOR_SIZES:{S:55,M:75,L:100},
@@ -1776,21 +1777,17 @@ function bodyCenterScreen(o,i){
 }
 
 /* ---------- drawing ports from main.lua ---------- */
-function drawWallBody(cx,cy,len,angleDeg,lineWidth){
-  const a = rad(angleDeg), c=Math.cos(a), s=Math.sin(a), h=len/2;
-  const x1=cx-c*h, y1=cy-s*h, x2=cx+c*h, y2=cy+s*h;
-  const px=-s*2, py=c*2;
-  ctx.strokeStyle = INK;
-  ctx.lineWidth = lineWidth || CFG.WALL_LINE_WIDTH;
-  ctx.lineCap = "butt";
-  ctx.beginPath(); ctx.moveTo(x1+px,y1+py); ctx.lineTo(x2+px,y2+py); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(x1-px,y1-py); ctx.lineTo(x2-px,y2-py); ctx.stroke();
+function drawWallBody(cx,cy,len,angleDeg,lineWidth,bodyWidth){
+  // SOLID wall: dithered filled body + crisp outline (matches game drawWallBodyAt).
+  const a = rad(angleDeg), ux=Math.cos(a), uy=Math.sin(a), px=-uy, py=ux;
+  const hL=len/2, hW=(bodyWidth||CFG.WALL_WIDTH)/2;
+  const P=(su,sp)=>[cx+ux*su+px*sp, cy+uy*su+py*sp];
+  const c0=P(-hL,-hW), c1=P(hL,-hW), c2=P(hL,hW), c3=P(-hL,hW);
+  ctx.fillStyle = dither(0.35);
+  ctx.beginPath(); ctx.moveTo(...c0); ctx.lineTo(...c1); ctx.lineTo(...c2); ctx.lineTo(...c3); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = lineWidth || 2; ctx.lineJoin="miter"; ctx.lineCap="butt";
+  ctx.beginPath(); ctx.moveTo(...c0); ctx.lineTo(...c1); ctx.lineTo(...c2); ctx.lineTo(...c3); ctx.closePath(); ctx.stroke();
   ctx.lineWidth = 1;
-  ctx.strokeStyle = dither(0.5);
-  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
-  ctx.fillStyle = INK;
-  ctx.beginPath(); ctx.arc(x1,y1,2,0,7); ctx.fill();
-  ctx.beginPath(); ctx.arc(x2,y2,2,0,7); ctx.fill();
 }
 function drawHazardBody(cx,cy,r,fc){
   const bladeCount = 8;
@@ -1826,18 +1823,17 @@ function drawSlideRailFor(o){
   drawSlideRailAtS(sx,sy,o.slideAngle||0,-sp,sp);
 }
 function drawDeflectorAtS(cx,cy,length,angleDeg,selected){
-  const a = rad(angleDeg);
-  const ux=Math.cos(a), uy=Math.sin(a), px=-uy, py=ux;
-  const hL=length/2, hW=CFG.BAR_WIDTH/2;
-  if (selected) dashedCircle(cx,cy,hL+hW);
-  const P=(su,sp)=>[cx+ux*su+px*sp, cy+uy*su+py*sp];
-  const c0=P(-hL,-hW), c1=P(hL,-hW), c2=P(hL,hW), c3=P(-hL,hW);
-  ctx.fillStyle = dither(0.25);
-  ctx.beginPath(); ctx.moveTo(...c0); ctx.lineTo(...c1); ctx.lineTo(...c2); ctx.lineTo(...c3); ctx.closePath(); ctx.fill();
-  ctx.strokeStyle = INK; ctx.lineWidth = selected?3:2; ctx.lineJoin="miter";
-  ctx.beginPath(); ctx.moveTo(...c0); ctx.lineTo(...c1); ctx.lineTo(...c2); ctx.lineTo(...c3); ctx.closePath(); ctx.stroke();
+  // BLADE: thin centerline + rounded tips + pivot (matches game Deflector:draw).
+  const a = rad(angleDeg), c=Math.cos(a), s=Math.sin(a), hL=length/2;
+  const x1=cx-c*hL, y1=cy-s*hL, x2=cx+c*hL, y2=cy+s*hL;
+  if (selected) dashedCircle(cx,cy,hL+4);
+  ctx.strokeStyle = INK; ctx.lineWidth = selected?5:3; ctx.lineCap="butt";
+  ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
   ctx.lineWidth = 1;
+  const tipR = selected?3:2;
   ctx.fillStyle = INK;
+  ctx.beginPath(); ctx.arc(x1,y1,tipR,0,7); ctx.fill();
+  ctx.beginPath(); ctx.arc(x2,y2,tipR,0,7); ctx.fill();
   ctx.beginPath(); ctx.arc(cx,cy,4,0,7); ctx.fill();
   ctx.beginPath(); ctx.arc(cx,cy,5,0,7); ctx.stroke();
 }
@@ -1962,7 +1958,7 @@ function drawObject(o,i){
     case "sliding_wall": {
       drawSlideRailFor(o);
       const [cx,cy]=slideBodyScreen(o,effPos(o,i));
-      drawWallBody(cx,cy,o.length,effAngle(o,i), selected?7:undefined);
+      drawWallBody(cx,cy,o.length,effAngle(o,i), selected?7:undefined, CFG.BAR_WIDTH);
       break;
     }
     case "moving_wall": {
@@ -2285,7 +2281,7 @@ function drawSim(sim){
       case "sliding_wall": {
         drawSlideRailAtS(obj.x, obj.y, obj.slideAngle, obj.minSlide, obj.maxSlide);
         const [cx,cy] = slideCenterOfSim(obj);
-        drawWallBody(cx, cy, obj.length, obj.angle, isSelected ? 7 : undefined);
+        drawWallBody(cx, cy, obj.length, obj.angle, isSelected ? 7 : undefined, CFG.BAR_WIDTH);
         break;
       }
       case "moving_wall": {
