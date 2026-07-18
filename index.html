@@ -242,7 +242,7 @@ const CFG = {
   ARENA_INSET:20,
   BAR_WIDTH:16,
   WALL_WIDTH:12,
-  JUNCTION_SNAP:16,
+  JUNCTION_SNAP:4,
   WALL_SIZES:{S:50,M:70,L:100},
   DEFLECTOR_SIZES:{S:55,M:75,L:100},
   SLIDER_SPANS:{S:42,M:60,L:90},
@@ -673,7 +673,8 @@ const BUILTIN_LEVELS = [{"n":1,"name":"First Roll","theme":"Roll","lua":"{ name 
    ===================================================================== */
 const SIM = {
   BALL_RADIUS:5, BALL_CRANK_SENS:0.55, BAR_CRANK_SENS:0.45, BAR_RIDER_SCALE:0.6,
-  BAR_WIDTH:16, WALL_WIDTH:12, JUNCTION_SNAP:16.0, JUNCTION_EPSILON:6.0,
+  BAR_WIDTH:16, WALL_WIDTH:12, JUNCTION_SNAP:4.0, JUNCTION_EPSILON:6.0,
+  EDGE_SEAL_MIN_OVERLAP:0.5,
   COIN_PICKUP:9.0, EXIT_PICKUP:12, COIN_BONUS:500,
   LAUNCH_SPEED:6.5, MOUTH_DIST:18, LAUNCHER_BOARD_SNAP:28.0, LAUNCH_CATCH_SNAP:14.0,
   LAUNCH_GRACE:8, LAUNCHER_CRANK_SENS:0.5, SLIDER_CRANK_SENS:0.6,
@@ -791,6 +792,111 @@ const RL = {
       hitY = ay + hitT*dy;
     }
     return {hitY, s:accum + hitT*len};
+  },
+  faceEndpoints(rail, perpSign){
+    const hL = (rail.barLength || 0) * 0.5;
+    const hW = rail.halfWidth || 8;
+    const cx = rail.cx || 0, cy = rail.cy || 0;
+    const ux = rail.ux || 1, uy = rail.uy || 0;
+    const px = rail.px || 0, py = rail.py || 1;
+    const p = perpSign * hW;
+    return {
+      x1: cx + ux*(-hL) + px*p, y1: cy + uy*(-hL) + py*p,
+      x2: cx + ux*hL + px*p, y2: cy + uy*hL + py*p,
+    };
+  },
+  arenaArcSpans(s0, s1, arenaLen){
+    if (arenaLen <= 0) return {span0:s0, span1:s1, spanLen:0};
+    s0 = mod(s0, arenaLen); s1 = mod(s1, arenaLen);
+    const forward = mod(s1 - s0, arenaLen);
+    const backward = mod(s0 - s1, arenaLen);
+    if (forward <= backward) return {span0:s0, span1:s1, spanLen:forward};
+    return {span0:s1, span1:s0, spanLen:backward};
+  },
+  arenaSInSpan(s, span0, span1, arenaLen){
+    if (arenaLen <= 0) return false;
+    s = mod(s, arenaLen); span0 = mod(span0, arenaLen); span1 = mod(span1, arenaLen);
+    if (span0 <= span1) return s >= span0 && s <= span1;
+    return s >= span0 || s <= span1;
+  },
+  arenaTravelHitsSpan(prevS, nextS, span0, span1, arenaLen){
+    if (RL.arenaSInSpan(nextS, span0, span1, arenaLen)) return true;
+    if (arenaLen <= 0) return false;
+    const delta = mod(nextS - prevS, arenaLen);
+    if (delta > arenaLen * 0.5) return RL.arenaSInSpan(prevS, span0, span1, arenaLen);
+    const steps = Math.max(2, Math.floor(Math.abs(mod(nextS - prevS, arenaLen)) / 4));
+    for (let i = 1; i <= steps; i++){
+      const t = i / steps;
+      const s = prevS + (nextS - prevS) * t;
+      if (RL.arenaSInSpan(s, span0, span1, arenaLen)) return true;
+    }
+    return false;
+  },
+  /** Long-face flush seals against arena AABB edges (rejects tip-kisses). */
+  arenaEdgeSeals(rail, arena, left, top, right, bottom, gapTol, minOverlapFrac){
+    const out = [];
+    if (!rail || rail.kind !== "bar_outline" || !arena) return out;
+    gapTol = gapTol ?? 4;
+    minOverlapFrac = minOverlapFrac ?? 0.5;
+    const barLen = rail.barLength || 0;
+    if (barLen < 1) return out;
+    const minOverlap = barLen * minOverlapFrac;
+    const arenaLen = RL.length(arena);
+    if (arenaLen <= 0) return out;
+    const edges = [
+      {name:"left", axis:"x", value:left, outward:-1},
+      {name:"right", axis:"x", value:right, outward:1},
+      {name:"top", axis:"y", value:top, outward:-1},
+      {name:"bottom", axis:"y", value:bottom, outward:1},
+    ];
+    for (const edge of edges){
+      for (const perpSign of [-1, 1]){
+        const {x1,y1,x2,y2} = RL.faceEndpoints(rail, perpSign);
+        const fdx = x2-x1, fdy = y2-y1;
+        const faceLen = Math.hypot(fdx, fdy);
+        const parallel = edge.axis === "x"
+          ? Math.abs(fdx) <= gapTol + 1
+          : Math.abs(fdy) <= gapTol + 1;
+        if (faceLen < minOverlap * 0.5 || !parallel) continue;
+        let g1, g2;
+        if (edge.axis === "x"){
+          g1 = (x1 - edge.value) * edge.outward;
+          g2 = (x2 - edge.value) * edge.outward;
+        } else {
+          g1 = (y1 - edge.value) * edge.outward;
+          g2 = (y2 - edge.value) * edge.outward;
+        }
+        const gap = Math.max(g1, g2);
+        const gapMin = Math.min(g1, g2);
+        let overlap;
+        if (edge.axis === "x"){
+          const yLo = Math.min(y1,y2), yHi = Math.max(y1,y2);
+          overlap = Math.max(0, Math.min(yHi, bottom) - Math.max(yLo, top));
+        } else {
+          const xLo = Math.min(x1,x2), xHi = Math.max(x1,x2);
+          overlap = Math.max(0, Math.min(xHi, right) - Math.max(xLo, left));
+        }
+        if (gap > gapTol || gapMin < -gapTol || overlap < minOverlap) continue;
+        const sA = RL.closestPoint(arena, x1, y1).s;
+        const sB = RL.closestPoint(arena, x2, y2).s;
+        const {span0, span1, spanLen} = RL.arenaArcSpans(sA, sB, arenaLen);
+        if (spanLen < minOverlap * 0.5) continue;
+        out.push({
+          edge: edge.name, s0: span0, s1: span1,
+          sealedPerp: perpSign, interiorSide: -perpSign,
+          gap: Math.max(0, gapMin), overlap,
+        });
+      }
+    }
+    return out;
+  },
+  isArenaEdgeSeal(rail, left, top, right, bottom, gapTol, minOverlapFrac){
+    const arena = {
+      closed:true,
+      pts:[{x:left,y:top},{x:right,y:top},{x:right,y:bottom},{x:left,y:bottom}],
+    };
+    const seals = RL.arenaEdgeSeals(rail, arena, left, top, right, bottom, gapTol, minOverlapFrac);
+    return seals.length > 0;
   },
 };
 
@@ -1176,6 +1282,72 @@ function createClingSim(level){
     }
   }
 
+  function sealsForRail(railIndex){
+    const list = game.arenaSeals;
+    if (!list) return null;
+    const out = [];
+    for (const seal of list){
+      if (seal.railIndex === railIndex) out.push(seal);
+    }
+    return out.length ? out : null;
+  }
+  function findHitArenaSeal(prevS, nextS){
+    const list = game.arenaSeals;
+    if (!list || !list.length) return null;
+    const arena = game.rails[1];
+    if (!arena) return null;
+    const arenaLen = RL.length(arena);
+    for (const seal of list){
+      if (!isIgnored(seal.railIndex)
+          && RL.arenaTravelHitsSpan(prevS, nextS, seal.s0, seal.s1, arenaLen)){
+        return seal;
+      }
+    }
+    return null;
+  }
+  function arenaSDeepInSeal(arenaS, seal, arenaLen, margin){
+    margin = margin ?? 6;
+    if (!RL.arenaSInSpan(arenaS, seal.s0, seal.s1, arenaLen)) return false;
+    return Math.min(arenaArcDist(arenaS, seal.s0), arenaArcDist(arenaS, seal.s1)) > margin;
+  }
+  function forceBoardSeal(seal, travelDir, px, py, tvx, tvy, leftIndex){
+    const r = game.rails[seal.railIndex];
+    if (!r || r.kind !== "bar_outline") return false;
+    let bestTip = null, bestScore = -Infinity;
+    for (const tipSign of [-1, 1]){
+      const cap = closestOnBarEndCap(r, tipSign, px, py);
+      const toward = (cap.cx - px)*tvx + (cap.cy - py)*tvy;
+      const score = toward * 10 - cap.d;
+      if (score > bestScore){
+        bestScore = score;
+        bestTip = cap;
+      }
+    }
+    if (!bestTip) return false;
+    const sign = pickOutlinePushSign(
+      r, bestTip.s, bestTip.perp, px, py, tvx, tvy, seal.interiorSide);
+    applyTransfer(seal.railIndex, bestTip.s, sign, tipClearance(r), travelDir, leftIndex);
+    return true;
+  }
+  function escapeSealedFace(rail, railIndex, px, py){
+    const seals = sealsForRail(railIndex);
+    if (!seals) return false;
+    const hW = rail.halfWidth || 8;
+    const dx = px - (rail.cx || 0), dy = py - (rail.cy || 0);
+    const along = dx*(rail.ux||1) + dy*(rail.uy||0);
+    const perp = dx*(rail.px||0) + dy*(rail.py||1);
+    for (const seal of seals){
+      if (Math.abs(perp - seal.sealedPerp*hW) <= 2.5){
+        const ix = (rail.cx||0) + (rail.ux||1)*along + (rail.px||0)*(-seal.sealedPerp*hW);
+        const iy = (rail.cy||0) + (rail.uy||0)*along + (rail.py||1)*(-seal.sealedPerp*hW);
+        ball.s = RL.closestPoint(rail, ix, iy).s;
+        clampOrWrap();
+        return true;
+      }
+    }
+    return false;
+  }
+
   function resolveJunction(travelDir){
     if (ball.mode !== "cling") return;
     if (travelDir === 0) return;
@@ -1192,26 +1364,62 @@ function createClingSim(level){
       }
     }
 
-    const [px,py] = RL.pointAt(myRail, ball.s);
+    let [px,py] = RL.pointAt(myRail, ball.s);
     updateIgnoreClear(px,py);
 
-    const [mtx,mty] = RL.tangentAt(myRail, ball.s);
-    const tvx = mtx*travelDir, tvy = mty*travelDir;
+    let [mtx,mty] = RL.tangentAt(myRail, ball.s);
+    let tvx = mtx*travelDir, tvy = mty*travelDir;
     const snap = SIM.JUNCTION_SNAP;
     const leftIndex = ball.rail;
 
+    // Arena sealed spans: cannot slip between a flush solid and the edge.
+    if (ball.rail === 1){
+      let prevS = ball.prevS;
+      if (prevS == null || ball.prevRail !== 1) prevS = ball.s;
+      const seal = findHitArenaSeal(prevS, ball.s);
+      if (seal){
+        const arena = game.rails[1];
+        const arenaLen = RL.length(arena);
+        if (RL.arenaSInSpan(ball.s, seal.s0, seal.s1, arenaLen)){
+          const d0 = arenaArcDist(ball.s, seal.s0);
+          const d1 = arenaArcDist(ball.s, seal.s1);
+          ball.s = (d0 <= d1) ? seal.s0 : seal.s1;
+          clampOrWrap();
+          [px,py] = RL.pointAt(myRail, ball.s);
+          [mtx,mty] = RL.tangentAt(myRail, ball.s);
+          tvx = mtx*travelDir; tvy = mty*travelDir;
+        }
+        if (forceBoardSeal(seal, travelDir, px, py, tvx, tvy, leftIndex)) return;
+      }
+    }
+
     // On a bar outline: may exit to arena only through a tip, outward.
     if (myRail.kind === "bar_outline"){
+      escapeSealedFace(myRail, ball.rail, px, py);
+      [px,py] = RL.pointAt(myRail, ball.s);
+
       if (!isIgnored(1)){
         const arena = game.rails[1];
+        const arenaLen = RL.length(arena);
+        const mySeals = sealsForRail(ball.rail);
         let bestTip = null, bestD = snap;
         for (const tipSign of [-1,1]){
           const cap = closestOnBarEndCap(myRail, tipSign, px, py);
           if (cap.d <= bestD && leavingThroughTip(myRail, cap.alongSign, tvx, tvy)){
             const acp = RL.closestPoint(arena, px, py);
             if (acp.d <= snap){
-              bestD = cap.d;
-              bestTip = {arenaS: acp.s, tipDist: cap.d, alongSign: cap.alongSign};
+              let blocked = false;
+              if (mySeals){
+                for (const seal of mySeals){
+                  if (arenaSDeepInSeal(acp.s, seal, arenaLen, snap + 2)){
+                    blocked = true; break;
+                  }
+                }
+              }
+              if (!blocked){
+                bestD = cap.d;
+                bestTip = {arenaS: acp.s, tipDist: cap.d, alongSign: cap.alongSign};
+              }
             }
           }
         }
@@ -1235,6 +1443,20 @@ function createClingSim(level){
             const dNeg = (bx-myRail.cx)**2 + (by-myRail.cy)**2;
             sign = (dPos >= dNeg) ? 1 : -1;
           }
+          if (mySeals){
+            for (const seal of mySeals){
+              if (RL.arenaSInSpan(bestTip.arenaS, seal.s0, seal.s1, arenaLen)
+                  || arenaArcDist(bestTip.arenaS, seal.s0) <= snap + 2
+                  || arenaArcDist(bestTip.arenaS, seal.s1) <= snap + 2){
+                const sPos = bestTip.arenaS + push;
+                const sNeg = bestTip.arenaS - push;
+                const posIn = arenaSDeepInSeal(sPos, seal, arenaLen, 2);
+                const negIn = arenaSDeepInSeal(sNeg, seal, arenaLen, 2);
+                if (posIn && !negIn) sign = -1;
+                else if (negIn && !posIn) sign = 1;
+              }
+            }
+          }
           applyTransfer(1, bestTip.arenaS, sign, push, travelDir, leftIndex);
           return;
         }
@@ -1245,6 +1467,7 @@ function createClingSim(level){
     // Generic / boarding bars from arena or tip-to-tip.
     let best = null, bestDist = snap;
     const fromArena = (ball.rail === 1);
+    let forcedPreferSide = null;
 
     for (let i=1;i<game.rails.length;i++){
       const r = game.rails[i];
@@ -1266,6 +1489,9 @@ function createClingSim(level){
             if (ok){
               bestDist = cap.d;
               best = {rail:i, s:cap.s, outline:true, perp:cap.perp, alongSign:cap.alongSign, fromArena};
+              forcedPreferSide = null;
+              const seals = sealsForRail(i);
+              if (fromArena && seals) forcedPreferSide = seals[0].interiorSide;
             }
           }
         }
@@ -1279,6 +1505,7 @@ function createClingSim(level){
               const [cx2,cy2] = RL.pointAt(r, cp.s);
               if (cp.d <= 2 || (cx2-px)*tvx + (cy2-py)*tvy > 0.05){
                 best = {rail:i, s:cp.s}; bestDist = cp.d;
+                forcedPreferSide = null;
               }
             }
           }
@@ -1289,6 +1516,7 @@ function createClingSim(level){
             if (d <= bestDist){
               if (d <= 2 || (bx-px)*tvx + (by-py)*tvy > 0.05){
                 best = {rail:i, s}; bestDist = d;
+                forcedPreferSide = null;
               }
             }
           }
@@ -1303,8 +1531,8 @@ function createClingSim(level){
     let push = SIM.JUNCTION_EPSILON;
 
     if (best.outline){
-      let preferSide = null;
-      if (best.fromArena){
+      let preferSide = forcedPreferSide;
+      if (preferSide == null && best.fromArena){
         const travelSide = tvx*nRail.px + tvy*nRail.py;
         if (Math.abs(travelSide) > 0.05) preferSide = -travelSide;
       }
@@ -1770,6 +1998,21 @@ function createClingSim(level){
       const r = simGetRail(obj);
       if (r){ game.rails.push(r); game.railOwners.push(obj); }
     }
+    const inset = SIM.ARENA_INSET;
+    const L = inset, T = inset;
+    const R = CFG.SCREEN_W - inset, B = CFG.SCREEN_H - inset;
+    const gapTol = SIM.JUNCTION_SNAP;
+    const minFrac = SIM.EDGE_SEAL_MIN_OVERLAP ?? 0.5;
+    const arena = game.rails[1];
+    const seals = [];
+    for (let i = 2; i < game.rails.length; i++){
+      const found = RL.arenaEdgeSeals(game.rails[i], arena, L, T, R, B, gapTol, minFrac);
+      for (const seal of found){
+        seal.railIndex = i;
+        seals.push(seal);
+      }
+    }
+    game.arenaSeals = seals;
   }
   function railIndexOf(obj){
     for (let i=1;i<game.railOwners.length;i++){
@@ -2558,12 +2801,38 @@ function drawSelectionHighlightS(cx,cy,frameCount){
   }
   ctx.lineWidth = 1;
 }
+function drawArenaSeals(sim){
+  const seals = sim.game.arenaSeals;
+  const arena = sim.game.rails && sim.game.rails[1];
+  if (!seals || !seals.length || !arena) return;
+  const arenaLen = RL.length(arena);
+  if (arenaLen <= 0) return;
+  ctx.strokeStyle = dither(0.35);
+  ctx.lineWidth = 3;
+  ctx.setLineDash([4, 3]);
+  for (const seal of seals){
+    const spanLen = mod(seal.s1 - seal.s0, arenaLen);
+    const steps = Math.max(4, Math.floor(spanLen / 3));
+    ctx.beginPath();
+    for (let i = 0; i <= steps; i++){
+      const t = i / steps;
+      let s = seal.s0 + spanLen * t;
+      if (arena.closed) s = mod(s, arenaLen);
+      const [x,y] = RL.pointAt(arena, s);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+  ctx.lineWidth = 1;
+}
 function drawSim(sim){
   ctx.setTransform(2,0,0,2,0,0);
   ctx.fillStyle = "#fff";
   ctx.fillRect(0,0,400,240);
   const g = sim.game, ball = sim.ball;
   drawArena(g.arenaCeiling, spikedEdgesList(g.arenaSpikes || {}));
+  drawArenaSeals(sim);
 
   const sel = g.crankTargets[g.selIndex];
   const docked = sim.isDocked() ? ball.dockedLauncher : null;
@@ -2754,18 +3023,49 @@ function validate(){
     if (Math.abs(o.x) > 180 + reach || Math.abs(o.y) > 100 + reach)
       warns.push(`#${i+1} ${o.type} at (${fmtNum(o.x)}, ${fmtNum(o.y)}) sits outside the arena beyond its reach.`);
   });
-  return {errs, warns};
+
+  // Flush long-face seals (intentional; blocks perimeter slip-through in play).
+  const infos = [];
+  const inset = CFG.ARENA_INSET;
+  const aL = inset, aT = inset, aR = CFG.SCREEN_W - inset, aB = CFG.SCREEN_H - inset;
+  objs.forEach((o,i)=>{
+    if (!["wall","toggle_wall","moving_wall","sliding_wall","breakable_wall"].includes(o.type)) return;
+    let cx, cy;
+    if (SLIDE_TYPES.has(o.type)){
+      const [sx,sy] = toScreen(o.x, o.y);
+      const span = slideSpan(o);
+      const pos = Math.max(0, Math.min(1, o.objectPosition ?? 0.5));
+      const pix = -span + pos * (2*span);
+      const r = rad(o.slideAngle || 0);
+      cx = sx + Math.cos(r)*pix; cy = sy + Math.sin(r)*pix;
+    } else {
+      [cx,cy] = toScreen(o.x, o.y);
+    }
+    const w = (o.type === "sliding_wall") ? CFG.BAR_WIDTH : CFG.WALL_WIDTH;
+    const len = o.length ?? CFG.WALL_SIZES[o.size || "M"] ?? CFG.WALL_SIZES.M;
+    const rail = makeBarOutlineRailS(cx, cy, len, o.angle || 0, w);
+    const arena = arenaRailS("solid");
+    const seals = RL.arenaEdgeSeals(
+      rail, arena, aL, aT, aR, aB, CFG.JUNCTION_SNAP, SIM.EDGE_SEAL_MIN_OVERLAP ?? 0.5);
+    for (const seal of seals){
+      infos.push(`#${i+1} ${o.type} seals ${seal.edge} edge (flush — no slip-through)`);
+    }
+  });
+  return {errs, warns, infos};
 }
 function renderWarnings(){
-  const {errs, warns} = validate();
+  const {errs, warns, infos} = validate();
   const box = el("warnList");
   box.innerHTML = "";
-  if (!errs.length && !warns.length){
+  if (!errs.length && !warns.length && !(infos && infos.length)){
     box.innerHTML = '<div class="warn-item ok">All checks pass.</div>';
     return;
   }
   for (const e of errs){ const d=document.createElement("div"); d.className="warn-item err"; d.textContent=e; box.appendChild(d); }
   for (const w of warns){ const d=document.createElement("div"); d.className="warn-item"; d.textContent=w; box.appendChild(d); }
+  for (const info of (infos || [])){
+    const d=document.createElement("div"); d.className="warn-item ok"; d.textContent=info; box.appendChild(d);
+  }
 }
 
 /* ---------- properties panel ---------- */
