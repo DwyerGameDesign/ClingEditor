@@ -863,6 +863,40 @@ const RL = {
     }
     return {d:bestDist, s:bestS};
   },
+  segmentIndexAt(rail, s){
+    const segs = RL.segments(rail);
+    const n = segs.length;
+    if (n === 0) return null;
+    const total = RL.length(rail);
+    if (total <= 0) return 1;
+    let query = s;
+    if (rail.closed) query = mod(query, total);
+    else { if (query < 0) query = 0; if (query > total) query = total; }
+    let remaining = query;
+    for (let i = 0; i < segs.length; i++){
+      if (remaining <= segs[i].len || i === n - 1) return i + 1;
+      remaining -= segs[i].len;
+    }
+    return n;
+  },
+  distToCorner(rail, s){
+    const segs = RL.segments(rail);
+    const total = RL.length(rail);
+    if (total <= 0) return 0;
+    let query = s;
+    if (rail.closed) query = mod(query, total);
+    else { if (query < 0) query = 0; if (query > total) query = total; }
+    let best = Math.min(query, total - query);
+    if (!rail.closed) best = Math.min(query, Math.abs(total - query));
+    let accum = 0;
+    for (const seg of segs){
+      accum += seg.len;
+      let d = Math.abs(query - accum);
+      if (rail.closed) d = Math.min(d, total - d);
+      if (d < best) best = d;
+    }
+    return best;
+  },
   pointInBar(rail, px, py, pad){
     if (!rail || rail.kind !== "bar_outline") return false;
     pad = pad || 0;
@@ -893,14 +927,12 @@ const RL = {
     const yAtTMin = ay+tMin*dy, yAtTMax = ay+tMax*dy;
     const loY = Math.min(yAtTMin,yAtTMax), hiY = Math.max(yAtTMin,yAtTMax);
     if (hiY < minY) return null;
-    let hitY = Math.max(loY,minY), hitT;
-    if (Math.abs(dy) < 1e-9) hitT = tMin;
-    else {
-      hitT = (hitY-ay)/dy;
-      if (hitT<tMin) hitT=tMin;
-      if (hitT>tMax) hitT=tMax;
-      hitY = ay + hitT*dy;
-    }
+    let hitY = Math.max(loY,minY);
+    const len2 = len * len;
+    let hitT = ((cx - ax) * dx + (hitY - ay) * dy) / len2;
+    if (hitT < 0) hitT = 0; else if (hitT > 1) hitT = 1;
+    if (hitT < tMin) hitT = tMin; else if (hitT > tMax) hitT = tMax;
+    hitY = ay + hitT * dy;
     return {hitY, s:accum + hitT*len};
   },
   faceEndpoints(rail, perpSign){
@@ -1481,6 +1513,27 @@ function createClingSim(level){
       if (score > bestScore){ bestScore = score; bestSign = sign; }
     }
     return bestSign;
+  }
+  /** Mid-face bar landings settle at contact; shove only near outline corners. */
+  function barOutlineLandPushSign(nRail, landS, fromX, fromY, approachX, approachY, preferSide){
+    const si = RL.segmentIndexAt(nRail, landS);
+    if (si === 2 || si === 4) return [1, 0];
+    const clear = tipClearance(nRail);
+    if (RL.distToCorner(nRail, landS) <= clear){
+      const sign = pickOutlinePushSign(
+        nRail, landS, null, fromX, fromY, approachX, approachY, preferSide);
+      return [sign, clear];
+    }
+    return [1, 0];
+  }
+  /** Open centerline rails: endpoint shove only (blades / sweepers). */
+  function openRailLandPushSign(nRail, landS){
+    const len = RL.length(nRail);
+    const clear = Math.max(SIM.JUNCTION_EPSILON, 10);
+    if (landS <= clear || landS >= len - clear){
+      return (landS <= len * 0.5) ? [1, clear] : [-1, clear];
+    }
+    return [1, 0];
   }
   function minDistToOwnerRail(owner, px, py){
     const idx = railIndexOfOwner(owner);
@@ -2178,16 +2231,16 @@ function createClingSim(level){
     const ux = vx/vlen, uy = vy/vlen;
     const dot = ntx*ux + nty*uy;
     let sign = (dot >= 0) ? 1 : -1;
-    let push = SIM.JUNCTION_EPSILON;
+    let push = 0;
     if (nRail.kind === "bar_outline"){
-      push = tipClearance(nRail);
       let preferSide = -(ux*nRail.px + uy*nRail.py);
       if (Math.abs(preferSide) < 0.05) preferSide = null;
-      sign = pickOutlinePushSign(nRail, landS, null, ball.flightX, ball.flightY, ux, uy, preferSide);
+      [sign, push] = barOutlineLandPushSign(
+        nRail, landS, ball.flightX, ball.flightY, ux, uy, preferSide);
+    } else if (railIndex === 1){
+      sign = 1; push = 0;
     } else if (!nRail.closed){
-      const len = RL.length(nRail);
-      sign = (landS <= len*0.5) ? 1 : -1;
-      push = Math.max(push, 10);
+      [sign, push] = openRailLandPushSign(nRail, landS);
     }
     boardRail(railIndex, landS, sign, push, sign, ball.flightX, ball.flightY);
   }
@@ -2349,18 +2402,15 @@ function createClingSim(level){
   function landFromFall(railIndex, landS){
     const nRail = game.rails[railIndex];
     if (!nRail) return;
-    let push = SIM.JUNCTION_EPSILON;
+    let push = 0;
     let sign = 1;
     if (nRail.kind === "bar_outline"){
-      push = tipClearance(nRail);
-      const preferSide = barTopPreferSide(nRail);
-      sign = pickOutlinePushSign(nRail, landS, null, ball.flightX, ball.flightY, 0, 1, preferSide);
+      [sign, push] = barOutlineLandPushSign(
+        nRail, landS, ball.flightX, ball.flightY, 0, 1, barTopPreferSide(nRail));
     } else if (railIndex === 1){
       sign = 1; push = 0;
     } else if (!nRail.closed){
-      const len = RL.length(nRail);
-      sign = (landS <= len*0.5) ? 1 : -1;
-      push = Math.max(push, 10);
+      [sign, push] = openRailLandPushSign(nRail, landS);
     }
     const fromX = ball.flightX, fromY = ball.flightY;
     const oldPol = ball.crankPolarity || 1;
