@@ -1190,6 +1190,7 @@ function createClingSim(level){
   const ball = {
     rail:1, s:0, spawnRail:1, spawnS:0,
     lastDir:1, respawnFlash:0, travelDir:0, frameCount:0, crankPolarity:1,
+    railSide:1,
     ignoreOwner:null, ignoreClearDist:0,
     ignoreArcFromS:null, ignoreArcNeed:0, ignoreClearBelowY:null,
     ignoreOnRail:null, ignoreTravelDir:null, ignoreReverseAccum:0, crankDeltaS:0,
@@ -1205,21 +1206,93 @@ function createClingSim(level){
   let exitReached = false;
 
   /* -------- ports of cling_ball.lua -------- */
-  /** Rolling-ball rule: clockwise crank rolls like a wheel gripping the surface. */
+  /** Open BLADE centerline (deflector / sweeper), not arena or solid outlines. */
+  function isOpenBladeRail(rail, railIndex){
+    if (!rail || railIndex === 1) return false;
+    if (rail.closed || rail.kind === "bar_outline") return false;
+    return true;
+  }
+  /** Rolling-ball rule: clockwise crank rolls like a wheel gripping the surface.
+   *  bar_outline always uses exterior normal (center → contact).
+   *  Open blades use screen-space L/R (+crank → +screen X; near-vertical → up). */
   function setRollingPolarity(railIndex, s, fromX, fromY){
     const r = game.rails[railIndex];
-    if (!r){ ball.crankPolarity = 1; return; }
+    if (!r){ ball.crankPolarity = 1; ball.railSide = 1; return; }
     const [tx, ty] = RL.tangentAt(r, s);
+    const chir = SIM.CRANK_CHIRALITY || 1;
+
+    if (isOpenBladeRail(r, railIndex)){
+      if (Math.abs(tx) >= 0.35){
+        ball.crankPolarity = (tx >= 0) ? chir : -chir;
+      } else {
+        ball.crankPolarity = (ty <= 0) ? chir : -chir;
+      }
+      if (fromX != null && fromY != null){
+        const [cx, cy] = RL.pointAt(r, s);
+        const px = -ty, py = tx;
+        const side = px * (fromX - cx) + py * (fromY - cy);
+        ball.railSide = (Math.abs(side) < 0.05) ? 1 : ((side >= 0) ? 1 : -1);
+      } else {
+        ball.railSide = 1;
+      }
+      return;
+    }
+
     const [cx, cy] = RL.pointAt(r, s);
     const px = -ty, py = tx;
-    const side = px * (fromX - cx) + py * (fromY - cy);
     let nx, ny;
-    if (Math.abs(side) < 0.05){ nx = 0; ny = -1; }
-    else if (side >= 0){ nx = px; ny = py; }
-    else { nx = -px; ny = -py; }
+    if (r.kind === "bar_outline" && r.cx != null && r.cy != null){
+      const ox = cx - r.cx, oy = cy - r.cy;
+      const olen = Math.hypot(ox, oy);
+      if (olen < 1e-4){ nx = 0; ny = -1; }
+      else { nx = ox / olen; ny = oy / olen; }
+      ball.railSide = (px * nx + py * ny >= 0) ? 1 : -1;
+    } else {
+      const side = px * (fromX - cx) + py * (fromY - cy);
+      if (Math.abs(side) < 0.05){
+        nx = 0; ny = -1;
+        ball.railSide = (px * nx + py * ny >= 0) ? 1 : -1;
+      } else if (side >= 0){
+        nx = px; ny = py;
+        ball.railSide = 1;
+      } else {
+        nx = -px; ny = -py;
+        ball.railSide = -1;
+      }
+    }
     const dx = -ny, dy = nx;
-    const chir = SIM.CRANK_CHIRALITY || 1;
     ball.crankPolarity = ((dx * tx + dy * ty) >= 0) ? chir : -chir;
+  }
+  /** Attach polarity log (editor sim is always a dev tool). */
+  function logPolarityAttach(reason, oldPol, railIndex){
+    const newPol = ball.crankPolarity || 1;
+    oldPol = oldPol || 1;
+    const r = game.rails[railIndex];
+    const kind = r ? (r.kind || (r.closed ? "closed" : "open")) : "?";
+    const shifted = (newPol !== oldPol) ? "yes" : "no";
+    let tx = 0, ty = 0;
+    if (r){
+      const t = RL.tangentAt(r, ball.s);
+      tx = t[0]; ty = t[1];
+    }
+    console.log(
+      `[cling attach] reason=${reason} rail=${railIndex} kind=${kind}`
+      + ` oldPol=${oldPol} newPol=${newPol} shifted=${shifted}`
+      + ` tx=${tx.toFixed(2)} ty=${ty.toFixed(2)}`
+    );
+  }
+  /** Recompute open-blade polarity from current tangent (screen L/R). */
+  function refreshOpenRailPolarity(){
+    if (ball.mode !== "cling") return;
+    const r = game.rails[ball.rail];
+    if (!isOpenBladeRail(r, ball.rail)) return;
+    const [tx, ty] = RL.tangentAt(r, ball.s);
+    const chir = SIM.CRANK_CHIRALITY || 1;
+    if (Math.abs(tx) >= 0.35){
+      ball.crankPolarity = (tx >= 0) ? chir : -chir;
+    } else {
+      ball.crankPolarity = (ty <= 0) ? chir : -chir;
+    }
   }
   function landingSquashNormal(nRail, landS, fromX, fromY){
     let [tx, ty] = RL.tangentAt(nRail, landS);
@@ -1256,6 +1329,7 @@ function createClingSim(level){
       setRollingPolarity(ball.spawnRail, ball.spawnS, cx - gx * rad, cy - gy * rad);
     } else {
       ball.crankPolarity = 1;
+      ball.railSide = 1;
     }
   }
   function setSpawn(railIndex, s){ ball.spawnRail = railIndex; ball.spawnS = s; resetToSpawn(); }
@@ -1450,6 +1524,7 @@ function createClingSim(level){
     const nRail = game.rails[railIndex];
     if (!nRail) return;
     sign = sign || 0; push = push || 0;
+    const oldPol = ball.crankPolarity || 1;
     ball.mode = "cling";
     ball.rail = railIndex;
     ball.s = landS + sign * push;
@@ -1467,7 +1542,9 @@ function createClingSim(level){
       setRollingPolarity(railIndex, ball.s, fromX, fromY);
     } else {
       ball.crankPolarity = 1;
+      ball.railSide = 1;
     }
+    logPolarityAttach("board", oldPol, railIndex);
   }
   function containedInSolid(skipIdx, px, py, r){
     for (let i = 1; i < game.rails.length; i++){
@@ -1662,25 +1739,37 @@ function createClingSim(level){
     return (-rail.ux*tipAlongSign)*tvx + (-rail.uy*tipAlongSign)*tvy > 0.2;
   }
   function applyTransfer(toRailIndex, landS, sign, push, travelDir, leftIndex){
+    const fromRail = game.rails[ball.rail];
+    let preX = 0, preY = 0;
+    if (fromRail){
+      const p = RL.pointAt(fromRail, ball.s);
+      preX = p[0]; preY = p[1];
+    }
+    const nRail = game.rails[toRailIndex];
+    const ontoBlade = isOpenBladeRail(nRail, toRailIndex);
     const oldPol = ball.crankPolarity || 1;
     ball.rail = toRailIndex;
     ball.s = landS + sign*push;
     ball.lastDir = sign;
-    ball.crankPolarity = sign * travelDir * oldPol;
-    if (ball.crankPolarity === 0) ball.crankPolarity = 1;
+    if (!ontoBlade){
+      ball.crankPolarity = sign * travelDir * oldPol;
+      if (ball.crankPolarity === 0) ball.crankPolarity = 1;
+    }
     clampOrWrap();
 
-    const nRail = game.rails[toRailIndex];
     if (nRail && !nRail.closed){
       const len = RL.length(nRail);
       if (ball.s <= 0.01){
         ball.s = push; ball.lastDir = 1;
-        ball.crankPolarity = travelDir * oldPol;
+        if (!ontoBlade) ball.crankPolarity = travelDir * oldPol;
       } else if (ball.s >= len - 0.01){
         ball.s = len - push; ball.lastDir = -1;
-        ball.crankPolarity = -travelDir * oldPol;
+        if (!ontoBlade) ball.crankPolarity = -travelDir * oldPol;
       }
     }
+
+    if (ontoBlade) setRollingPolarity(toRailIndex, ball.s, preX, preY);
+    logPolarityAttach("transfer", oldPol, toRailIndex);
 
     ball.ignoreOwner = ownerOf(leftIndex);
     const snap = SIM.JUNCTION_SNAP;
@@ -2161,6 +2250,7 @@ function createClingSim(level){
     ball.travelDir = 0; ball.lastDir = 1;
     // Crank is inert while falling; every landing path overwrites polarity.
     ball.crankPolarity = 1;
+    ball.railSide = 1;
     ball.dockedLauncher = null; ball.flightGrace = 0;
     ball.fallStartY = py;
     ball.ignoreOwner = owner;
@@ -2273,6 +2363,7 @@ function createClingSim(level){
       push = Math.max(push, 10);
     }
     const fromX = ball.flightX, fromY = ball.flightY;
+    const oldPol = ball.crankPolarity || 1;
     ball.mode = "cling";
     ball.rail = railIndex;
     ball.s = landS + sign*push;
@@ -2283,6 +2374,7 @@ function createClingSim(level){
     clearIgnore();
     clampOrWrap();
     setRollingPolarity(railIndex, ball.s, fromX, fromY);
+    logPolarityAttach("fall", oldPol, railIndex);
   }
   function hasLandableBelow(cx, cy){
     return findFallLanding(cx, cy + 0.5, null, false) != null;
@@ -2402,6 +2494,7 @@ function createClingSim(level){
     ball.mode = "falling";
     ball.travelDir = 0; ball.lastDir = 1;
     ball.crankPolarity = 1;
+    ball.railSide = 1;
     ball.dockedLauncher = null; ball.flightGrace = 0;
     ball.fallStartY = py;
     clearIgnore();
@@ -2849,6 +2942,7 @@ function createClingSim(level){
       const prevAngle = obj.angle;
       obj.angle = mod(obj.angle + change*sens, 360);   // DEFLECTOR_ANGLE_STEP is 0 (free rotate)
       buildRails();
+      refreshOpenRailPolarity();
       resolveBladeSweep(obj, prevAngle, obj.angle, true);
     } else if (obj.type === "sliding_wall"){
       const span = obj.maxSlide - obj.minSlide;
@@ -2959,6 +3053,7 @@ function createClingSim(level){
     stepPressurePlates();
     stepAutoMovers();
     buildRails();
+    refreshOpenRailPolarity();
     for (const obj of objects){
       if (obj.type === "moving_wall"
         && ((obj._frameVx || 0) !== 0 || (obj._frameVy || 0) !== 0)){
