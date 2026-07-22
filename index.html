@@ -771,7 +771,7 @@ const SIM = {
   JUMP_CUT_FACTOR:0.45, JUMP_NORMAL_BIAS:0,
   JUMP_TANGENT_INHERIT:0.6, JUMP_TANGENT_MAX:5.0,
   JUMP_CARRIER_INHERIT:1.0, JUMP_CARRIER_MAX:9.0,
-  JUMP_SOURCE_IGNORE_FRAMES:6, JUMP_COYOTE_FRAMES:0,
+  JUMP_SOURCE_IGNORE_FRAMES:6, JUMP_COYOTE_FRAMES:5,
   JUMP_AIR_CONTROL:true, JUMP_AIR_SENS:0.08, JUMP_AIR_MAX:5.0,
   // Moving solids / rotating blades scoop a clinging ball on contact.
   SOLID_SWEEP_ATTACH:true, BLADE_SCOOP_ATTACH:true,
@@ -1231,6 +1231,7 @@ function createClingSim(level){
     dropOriginY:null, dropFromRailIndex:null, fallStartY:null,
     jumpIgnoreFrames:0, jumpRising:false, jumpCutArmed:false,
     jumpLaunchX:null, jumpLaunchY:null, fromJump:false,
+    jumpCoyoteFrames:0, jumpCoyoteS:null, jumpCoyoteRail:null,
     mode:"cling", dockedLauncher:null,
     ignoreLauncher:null, ignoreLauncherFrames:0,
     flightX:0, flightY:0, flightVx:0, flightVy:0, flightGrace:0,
@@ -1349,6 +1350,7 @@ function createClingSim(level){
     ball.dropOriginY = null; ball.dropFromRailIndex = null; ball.fallStartY = null;
     ball.jumpIgnoreFrames = 0; ball.jumpRising = false; ball.jumpCutArmed = false;
     ball.jumpLaunchX = null; ball.jumpLaunchY = null; ball.fromJump = false;
+    clearJumpCoyote();
     ball.mode = "cling"; ball.dockedLauncher = null;
     ball.ignoreLauncher = null; ball.ignoreLauncherFrames = 0;
     ball.flightGrace = 0; ball.flightVx = 0; ball.flightVy = 0;
@@ -1586,6 +1588,7 @@ function createClingSim(level){
     ball.flightVx = 0; ball.flightVy = 0; ball.flightGrace = 0;
     ball.dockedLauncher = null;
     clearIgnore();
+    clearJumpCoyote();
     clampOrWrap();
     // Prefer squash normal for side test: from-point can be inside the solid.
     if (squashNx != null && squashNy != null){
@@ -1838,6 +1841,7 @@ function createClingSim(level){
     ball.ignoreOnRail = ball.rail;
     ball.ignoreTravelDir = ball.lastDir;
     ball.ignoreReverseAccum = 0;
+    clearJumpCoyote();
   }
 
   function sealsForRail(railIndex){
@@ -2312,6 +2316,7 @@ function createClingSim(level){
     ball.ignoreClearBelowY = null;
     ball.dropOriginY = py;
     ball.dropFromRailIndex = leftIndex;
+    clearJumpCoyote();
   }
   function isOnArenaFloor(){
     if (ball.rail !== 1) return false;
@@ -2353,6 +2358,36 @@ function createClingSim(level){
     }
     const [,ny] = segmentStandingNormal(rail, seg);
     return ny < faceNy;
+  }
+  function clearJumpCoyote(){
+    ball.jumpCoyoteFrames = 0;
+    ball.jumpCoyoteS = null;
+    ball.jumpCoyoteRail = null;
+  }
+  function clingFaceIsLandable(railIndex, s){
+    const rail = game.rails[railIndex];
+    if (!rail) return false;
+    const si = RL.segmentIndexAt(rail, s);
+    if (si == null) return false;
+    const segs = RL.segments(rail);
+    const seg = segs[si - 1];
+    if (!seg) return false;
+    return segmentIsLandable(railIndex, rail, si, seg);
+  }
+  function updateJumpCoyote(){
+    if (ball.mode !== "cling") return;
+    const n = SIM.JUMP_COYOTE_FRAMES || 0;
+    if (n <= 0){ clearJumpCoyote(); return; }
+    if (clingFaceIsLandable(ball.rail, ball.s)){
+      ball.jumpCoyoteFrames = n;
+      ball.jumpCoyoteS = ball.s;
+      ball.jumpCoyoteRail = ball.rail;
+      return;
+    }
+    if (!(ball.jumpCoyoteFrames > 0)) return;
+    if (ball.jumpCoyoteRail !== ball.rail){ clearJumpCoyote(); return; }
+    ball.jumpCoyoteFrames--;
+    if (ball.jumpCoyoteFrames <= 0) clearJumpCoyote();
   }
   function barTopPreferSide(rail){
     const faceNy = faceNyThreshold();
@@ -2422,6 +2457,7 @@ function createClingSim(level){
     ball.flightVx = 0; ball.flightVy = 0; ball.flightGrace = 0;
     ball.dropOriginY = null; ball.dropFromRailIndex = null;
     clearIgnore();
+    clearJumpCoyote();
     clampOrWrap();
     setRollingPolarity(railIndex, ball.s, fromX, fromY);
     logPolarityAttach("fall", oldPol, railIndex);
@@ -2474,6 +2510,7 @@ function createClingSim(level){
       ball.crankDeltaSStickyFrames--;
       if (ball.crankDeltaSStickyFrames <= 0) ball.crankDeltaSSticky = 0;
     }
+    updateJumpCoyote();
   }
   function clampVecLen(vx, vy, maxLen){
     const len = Math.hypot(vx, vy);
@@ -2501,14 +2538,27 @@ function createClingSim(level){
     if (!rail) return false;
     const [px, py] = worldPos();
     const gx = 0, gy = 1, upX = 0, upY = -1;
+
+    // Late jump: cranked off a landable top onto a side → use coyote snapshot geom.
+    let geomS = ball.s;
+    const coyoteN = SIM.JUMP_COYOTE_FRAMES || 0;
+    if (coyoteN > 0
+        && ball.jumpCoyoteFrames > 0
+        && ball.jumpCoyoteRail === ball.rail
+        && ball.jumpCoyoteS != null
+        && !clingFaceIsLandable(ball.rail, ball.s)){
+      geomS = ball.jumpCoyoteS;
+    }
+
     let nx, ny;
+    const [contactX, contactY] = RL.pointAt(rail, geomS);
     if (rail.kind === "bar_outline" && rail.cx != null){
-      nx = px - rail.cx; ny = py - rail.cy;
+      nx = contactX - rail.cx; ny = contactY - rail.cy;
       const nlen = Math.hypot(nx, ny);
       if (nlen < 1e-4){ nx = upX; ny = upY; }
       else { nx /= nlen; ny /= nlen; }
     } else {
-      [nx, ny] = landingSquashNormal(rail, ball.s, px + upX * 4, py + upY * 4);
+      [nx, ny] = landingSquashNormal(rail, geomS, contactX + upX * 4, contactY + upY * 4);
     }
     // Underside / ceiling cling: normal faces into gravity → refuse.
     if (nx * gx + ny * gy > 0.5) return false;
@@ -2523,7 +2573,7 @@ function createClingSim(level){
     // +g/2 pads semi-implicit Euler so authored HEIGHT matches measured apex.
     const v0 = Math.sqrt(2 * SIM.GRAVITY * SIM.JUMP_HEIGHT) + SIM.GRAVITY * 0.5;
     let vx = bx * v0, vy = by * v0;
-    const [tx, ty] = RL.tangentAt(rail, ball.s);
+    const [tx, ty] = RL.tangentAt(rail, geomS);
     // This-frame / sticky crank only — standing jump = pure up.
     let ts = ball.crankDeltaS || 0;
     if (Math.abs(ts) < 0.01) ts = ball.crankDeltaSSticky || 0;
@@ -2548,6 +2598,7 @@ function createClingSim(level){
     ball.dockedLauncher = null; ball.flightGrace = 0;
     ball.fallStartY = py;
     clearIgnore();
+    clearJumpCoyote();
     ball.dropOriginY = null;
     ball.dropFromRailIndex = leftIndex;
     ball.ignoreOwner = owner;
