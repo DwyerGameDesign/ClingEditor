@@ -176,6 +176,7 @@
     <button class="pal-btn" data-type="key"><span class="g">&#9675;</span>key</button>
     <button class="pal-btn" data-type="hazard"><span class="g">&#10041;</span>hazard</button>
     <button class="pal-btn" data-type="wall"><span class="g">&#9473;</span>wall</button>
+    <button class="pal-btn" data-type="peg"><span class="g">&#9679;</span>peg</button>
     <button class="pal-btn" data-type="deflector"><span class="g">&#9639;</span>deflector</button>
     <button class="pal-btn" data-type="sweeper"><span class="g">&#10530;</span>sweeper</button>
     <button class="pal-btn" data-type="toggle_wall"><span class="g">&#8635;</span>toggle wall</button>
@@ -253,6 +254,8 @@ const CFG = {
   CRAWLER_RADIUS_DEFAULT:9,
   DEFAULT_WALL_LENGTH:70,
   DEFAULT_DEFLECTOR_LENGTH:75,
+  DEFAULT_PEG_RADIUS:40,
+  PEG_SEGMENTS:32,
   DEFAULT_SLIDER_SPAN:60,
   DEFAULT_SWEEPER_SPEED:1.0,
   DEFAULT_TOGGLE_INTERVAL:150,
@@ -378,6 +381,7 @@ function newObject(type, x, y){
     case "wall":
       o.length = CFG.DEFAULT_WALL_LENGTH; o.angle = 0;
       break;
+    case "peg": o.radius = CFG.DEFAULT_PEG_RADIUS; break;
     case "deflector": o.length = CFG.DEFAULT_DEFLECTOR_LENGTH; o.angle = 0; o.group = (x < 0) ? "L" : "R"; break;
     case "sweeper":
       o.length = CFG.DEFAULT_WALL_LENGTH; o.angle = 0; o.minAngle = 0; o.maxAngle = 90;
@@ -475,7 +479,8 @@ const EXPORT_SPEC = {
   exit:         {l1:["x","y"], l2:[]},
   key:          {l1:["x","y"], l2:[]},
   hazard:       {l1:["x","y","radius"], l2:[]},
-  wall:         {l1:["x","y","length","angle"], l2:[]},
+  wall:         {l1:["x","y","length","angle","width"], l2:[]},
+  peg:          {l1:["x","y","radius"], l2:[]},
   deflector:    {l1:["x","y","length","angle","group"], l2:[]},
   launcher:     {l1:["x","y","angle"], l2:[]},
   sweeper:      {l1:["x","y","length","angle"], l2:["minAngle","maxAngle","speed"]},
@@ -527,6 +532,8 @@ function exportLevel(level){
     const parts = [];
     for (const k of spec.l1){
       if (o[k] === undefined) continue;
+      // Default wall width is implicit (CLING_WALL_WIDTH=12); omit from export.
+      if (k === "width" && o.type === "wall" && o[k] === CFG.WALL_WIDTH) continue;
       if (k === "x"){
         parts.push("x = " + (xVals[i]+",").padEnd(xW+1));
       } else if (k === "y"){
@@ -666,11 +673,12 @@ function parseLuaText(src){
 }
 
 // slideRange/speed intentionally omitted: letter strings must survive for legacy conversion.
-const NUMERIC_KEYS = new Set(["x","y","length","angle","radius","minAngle","maxAngle","angleStep","slideAngle","objectPosition","slidePosition","minSlide","maxSlide","slideOffset","maxOpen","direction","startPosition","link","plateId","pressedPosition"]);
+const NUMERIC_KEYS = new Set(["x","y","length","angle","width","radius","minAngle","maxAngle","angleStep","slideAngle","objectPosition","slidePosition","minSlide","maxSlide","slideOffset","maxOpen","direction","startPosition","link","plateId","pressedPosition"]);
 const KNOWN_KEYS = {
   spawn:["x","y"], exit:["x","y"], key:["x","y"],
   hazard:["x","y","radius"],
-  wall:["x","y","length","angle"],
+  wall:["x","y","length","angle","width"],
+  peg:["x","y","radius"],
   deflector:["x","y","length","angle","group"],
   launcher:["x","y","angle"],
   sweeper:["x","y","length","angle","minAngle","maxAngle","speed"],
@@ -822,7 +830,7 @@ const SIM = {
   BALL_RADIUS:5, BALL_CRANK_SENS:0.55, BAR_CRANK_SENS:0.45, BAR_RIDER_SCALE:0.6,
   // Rolling-ball polarity: +1 = clockwise crank rolls like a wheel (right on tops).
   CRANK_CHIRALITY:1,
-  BAR_WIDTH:16, WALL_WIDTH:12, JUNCTION_SNAP:4.0, JUNCTION_EPSILON:6.0,
+  BAR_WIDTH:16, WALL_WIDTH:12, PEG_SEGMENTS:32, JUNCTION_SNAP:4.0, JUNCTION_EPSILON:6.0,
   // Clear leave-ignore after this many px of reverse crank travel.
   IGNORE_REVERSAL_CLEAR:1.5,
   EDGE_SEAL_MIN_OVERLAP:0.5,
@@ -975,6 +983,27 @@ const RL = {
     const along = dx * (rail.ux || 1) + dy * (rail.uy || 0);
     const perp = dx * (rail.px || 0) + dy * (rail.py || 1);
     return Math.abs(along) <= hL && Math.abs(perp) <= hW;
+  },
+  pointInPeg(rail, px, py, pad){
+    if (!rail || rail.kind !== "peg") return false;
+    pad = pad || 0;
+    const dx = px - (rail.cx || 0), dy = py - (rail.cy || 0);
+    const r = (rail.radius || 0) + pad;
+    return dx * dx + dy * dy <= r * r;
+  },
+  pointInSolid(rail, px, py, pad){
+    if (!rail) return false;
+    if (rail.kind === "bar_outline") return RL.pointInBar(rail, px, py, pad);
+    if (rail.kind === "peg") return RL.pointInPeg(rail, px, py, pad);
+    return false;
+  },
+  pegSegmentLandable(rail, seg, faceNy){
+    if (!rail || !seg) return false;
+    const mx = (seg.a.x + seg.b.x) * 0.5, my = (seg.a.y + seg.b.y) * 0.5;
+    const ox = mx - (rail.cx || 0), oy = my - (rail.cy || 0);
+    const olen = Math.hypot(ox, oy);
+    if (olen < 1e-4) return false;
+    return (oy / olen) < faceNy;
   },
   fallHitOnSegment(ax,ay,bx,by,accum,cx,halfW,minY){
     const xLo=cx-halfW, xHi=cx+halfW;
@@ -1129,6 +1158,19 @@ function makeBarOutlineRailS(x,y,length,angleDeg,width){
     cx:x, cy:y, ux, uy, px, py,
   };
 }
+function makePegRailS(cx, cy, radius){
+  const n = SIM.PEG_SEGMENTS || CFG.PEG_SEGMENTS || 32;
+  const pts = [];
+  for (let i = 0; i < n; i++){
+    const a = (i / n) * Math.PI * 2;
+    pts.push({ x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius });
+  }
+  return { closed:true, pts, kind:"peg", cx, cy, radius };
+}
+function pegRadiusOf(o){
+  const r = (typeof o.radius === "number" && isFinite(o.radius)) ? o.radius : CFG.DEFAULT_PEG_RADIUS;
+  return Math.max(12, Math.min(100, r));
+}
 function arenaRailS(borders){
   const inset = SIM.ARENA_INSET;
   const L=inset, R=CFG.SCREEN_W-inset, T=inset, B=CFG.SCREEN_H-inset;
@@ -1164,7 +1206,12 @@ function makeSimObjects(level){
       case "key": case "coin": o.type = "key"; o.collected = false; break;
       case "wall": case "deflector":
         o.length = a.length; o.angle = a.angle||0;
-        if (a.type === "deflector") o.group = (a.group === "L" || a.group === "R") ? a.group : ((a.x < 0) ? "L" : "R");
+        if (a.type === "wall" && typeof a.width === "number") o.width = a.width;
+        // Deflector: L/R = crankable; omit/invalid group = static blade (no invent).
+        if (a.type === "deflector" && (a.group === "L" || a.group === "R")) o.group = a.group;
+        break;
+      case "peg":
+        o.radius = (typeof a.radius === "number") ? a.radius : CFG.DEFAULT_PEG_RADIUS;
         break;
       case "crawler": {
         o.radius = a.radius ?? CFG.CRAWLER_RADIUS_DEFAULT;
@@ -1234,9 +1281,19 @@ function simSlideCenter(o){
   const r = rad(o.slideAngle);
   return [o.x + Math.cos(r)*pix, o.y + Math.sin(r)*pix];
 }
+function wallBodyWidth(o){
+  // Static wall optional width (4–48); others use global SOLID defaults.
+  if (o && o.type === "wall" && typeof o.width === "number" && isFinite(o.width))
+    return Math.max(4, Math.min(48, o.width));
+  return CFG.WALL_WIDTH;
+}
 function simGetRail(o){
   switch(o.type){
-    case "wall": case "toggle_wall":
+    case "wall":
+      return makeBarOutlineRailS(o.x, o.y, o.length, o.angle, wallBodyWidth(o));
+    case "peg":
+      return makePegRailS(o.x, o.y, pegRadiusOf(o));
+    case "toggle_wall":
       return makeBarOutlineRailS(o.x, o.y, o.length, o.angle, SIM.WALL_WIDTH);
     case "deflector": case "sweeper":
       return makeOpenRailS(o.x, o.y, o.length, o.angle);
@@ -1296,11 +1353,15 @@ function createClingSim(level){
   };
   for (const obj of objects){
     // Launchers dock on contact; never in L/R groups.
+    // Deflector without L/R is a static blade. Sliders without L/R fall back to R in sim
+    // (game uses x-sign); only L/R members are crankable.
     if (obj.type==="deflector" || obj.type==="sliding_wall" || obj.type==="sliding_hazard"){
       if (obj.plateDriven) continue;
-      const g = (obj.group === "L" || obj.group === "R") ? obj.group : "R";
-      obj.group = g;
-      game.groups[g].push(obj);
+      if (obj.group !== "L" && obj.group !== "R"){
+        if (obj.type === "deflector"){ obj.group = null; continue; }
+        obj.group = "R";
+      }
+      game.groups[obj.group].push(obj);
     }
   }
 
@@ -1327,11 +1388,14 @@ function createClingSim(level){
   /** Open BLADE centerline (deflector / sweeper), not arena or solid outlines. */
   function isOpenBladeRail(rail, railIndex){
     if (!rail || railIndex === 1) return false;
-    if (rail.closed || rail.kind === "bar_outline") return false;
+    if (rail.closed || rail.kind === "bar_outline" || rail.kind === "peg") return false;
     return true;
   }
+  function isExteriorSolidRail(rail){
+    return rail && (rail.kind === "bar_outline" || rail.kind === "peg");
+  }
   /** Rolling-ball rule: clockwise crank rolls like a wheel gripping the surface.
-   *  bar_outline always uses exterior normal (center → contact).
+   *  Exterior solids (bar_outline / peg) use exterior normal (center → contact).
    *  Open blades use screen-space L/R (+crank → +screen X; near-vertical → up). */
   function setRollingPolarity(railIndex, s, fromX, fromY){
     const r = game.rails[railIndex];
@@ -1359,7 +1423,7 @@ function createClingSim(level){
     const [cx, cy] = RL.pointAt(r, s);
     const px = -ty, py = tx;
     let nx, ny;
-    if (r.kind === "bar_outline" && r.cx != null && r.cy != null){
+    if (isExteriorSolidRail(r) && r.cx != null && r.cy != null){
       const ox = cx - r.cx, oy = cy - r.cy;
       const olen = Math.hypot(ox, oy);
       if (olen < 1e-4){ nx = 0; ny = -1; }
@@ -1690,8 +1754,7 @@ function createClingSim(level){
   function containedInSolid(skipIdx, px, py, r){
     for (let i = 1; i < game.rails.length; i++){
       if (i === skipIdx) continue;
-      const other = game.rails[i];
-      if (other.kind === "bar_outline" && RL.pointInBar(other, px, py, r)) return true;
+      if (RL.pointInSolid(game.rails[i], px, py, r)) return true;
     }
     return false;
   }
@@ -2007,7 +2070,7 @@ function createClingSim(level){
     for (let i = 1; i < game.rails.length; i++){
       if (i === ball.rail || isIgnored(i)) continue;
       const r = game.rails[i];
-      if (r.kind !== "bar_outline") continue;
+      if (!isExteriorSolidRail(r)) continue;
       const cp = RL.closestPoint(r, px, py);
       if (cp.d <= bestD){ bestD = cp.d; bestI = i; bestS = cp.s; }
     }
@@ -2444,6 +2507,9 @@ function createClingSim(level){
       if (segIndex1 === 3) return rail.py < faceNy;
       return false;
     }
+    if (rail.kind === "peg"){
+      return RL.pegSegmentLandable(rail, seg, faceNy);
+    }
     if (railIndex === 1){
       return segIndex1 === arenaFloorSegIndex();
     }
@@ -2643,7 +2709,7 @@ function createClingSim(level){
 
     let nx, ny;
     const [contactX, contactY] = RL.pointAt(rail, geomS);
-    if (rail.kind === "bar_outline" && rail.cx != null){
+    if (isExteriorSolidRail(rail) && rail.cx != null){
       nx = contactX - rail.cx; ny = contactY - rail.cy;
       const nlen = Math.hypot(nx, ny);
       if (nlen < 1e-4){ nx = upX; ny = upY; }
@@ -2826,10 +2892,12 @@ function createClingSim(level){
     const r = SIM.BALL_RADIUS;
     for (let i = 1; i < game.rails.length; i++){
       const rail = game.rails[i];
-      if (rail.kind === "bar_outline" && !isIgnored(i)
-          && RL.pointInBar(rail, ball.flightX, ball.flightY, r)){
+      if (isExteriorSolidRail(rail) && !isIgnored(i)
+          && RL.pointInSolid(rail, ball.flightX, ball.flightY, r)){
         if (ball.fromJump){
           if (tryJumpSideCatch() || clingToRailClosest(i)) return;
+        } else if (rail.kind === "peg"){
+          if (clingToRailClosest(i)) return;
         }
       }
     }
@@ -2849,9 +2917,10 @@ function createClingSim(level){
       }
       for (let i = 1; i < game.rails.length; i++){
         const rail = game.rails[i];
-        if (rail.kind === "bar_outline" && !isIgnored(i)
-            && RL.pointInBar(rail, ball.flightX, ball.flightY, r)){
+        if (isExteriorSolidRail(rail) && !isIgnored(i)
+            && RL.pointInSolid(rail, ball.flightX, ball.flightY, r)){
           if (ball.fromJump && (tryJumpSideCatch() || clingToRailClosest(i))) return true;
+          if (!ball.fromJump && rail.kind === "peg" && clingToRailClosest(i)) return true;
         }
       }
       if (!graceThisFrame && tryFallLanding(prevY)) return true;
@@ -3419,6 +3488,14 @@ function drawWallBody(cx,cy,len,angleDeg,lineWidth,bodyWidth){
   ctx.beginPath(); ctx.moveTo(...c0); ctx.lineTo(...c1); ctx.lineTo(...c2); ctx.lineTo(...c3); ctx.closePath(); ctx.stroke();
   ctx.lineWidth = 1;
 }
+function drawPegBody(cx, cy, radius){
+  // Filled circular peg — dithered disc + outline (matches Peg:draw).
+  ctx.fillStyle = dither(0.35);
+  ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx, cy, radius, 0, Math.PI*2); ctx.stroke();
+  ctx.lineWidth = 1;
+}
 /** Pivot countdown puck — matches ToggleWall:draw() (fill clockwise from 12 o'clock). */
 function drawToggleWallClock(cx,cy,timer,intervalFrames,frameCount){
   const r = 8;
@@ -3545,7 +3622,7 @@ function drawGroupBadgeAtS(cx, cy, group, inverted){
   ctx.closePath(); ctx.fill();
 }
 function drawDeflectorAtS(cx,cy,length,angleDeg,selected,group){
-  // BLADE: thin centerline + rounded tips + screen-aligned group badge.
+  // BLADE: thin centerline + rounded tips; L/R badge only if crankable (static = rail only).
   const a = rad(angleDeg), c=Math.cos(a), s=Math.sin(a), hL=length/2;
   const x1=cx-c*hL, y1=cy-s*hL, x2=cx+c*hL, y2=cy+s*hL;
   if (selected) dashedCircle(cx,cy,hL+4);
@@ -3556,7 +3633,7 @@ function drawDeflectorAtS(cx,cy,length,angleDeg,selected,group){
   ctx.fillStyle = INK;
   ctx.beginPath(); ctx.arc(x1,y1,tipR,0,7); ctx.fill();
   ctx.beginPath(); ctx.arc(x2,y2,tipR,0,7); ctx.fill();
-  drawGroupBadgeAtS(cx, cy, group, !!selected);
+  if (group === "L" || group === "R") drawGroupBadgeAtS(cx, cy, group, !!selected);
 }
 function drawDeflector(o,i,selected){
   const [cx,cy] = toScreen(o.x,o.y);
@@ -3757,7 +3834,12 @@ function drawObject(o,i){
     case "hazard": { const [cx,cy]=toScreen(o.x,o.y); drawHazardBody(cx,cy,o.radius,frame); break; }
     case "wall": {
       const [cx,cy]=toScreen(o.x,o.y);
-      drawWallBody(cx,cy,o.length,effAngle(o,i));
+      drawWallBody(cx,cy,o.length,effAngle(o,i), undefined, wallBodyWidth(o));
+      break;
+    }
+    case "peg": {
+      const [cx,cy]=toScreen(o.x,o.y);
+      drawPegBody(cx, cy, pegRadiusOf(o));
       break;
     }
     case "toggle_wall": {
@@ -3840,6 +3922,8 @@ function objectReach(o){
   if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard") return (o.radius||14)+5;
   if (o.type==="crawler") return (o.radius||CFG.CRAWLER_RADIUS_DEFAULT||9)+5;
   if (o.type==="deflector") return o.length/2 + 8;
+  if (o.type==="wall") return o.length/2 + wallBodyWidth(o)/2;
+  if (o.type==="peg") return pegRadiusOf(o);
   if (BAR_TYPES.has(o.type)) return o.length/2;
   return 10;
 }
@@ -3856,7 +3940,8 @@ function editorCrawlerHostRail(o){
       bw = h.type === "sliding_wall" ? CFG.BAR_WIDTH : CFG.WALL_WIDTH;
     } else {
       [cx,cy] = toScreen(h.x, h.y);
-      len = h.length; ang = effAngle(h, hi); bw = CFG.WALL_WIDTH;
+      len = h.length; ang = effAngle(h, hi);
+      bw = (h.type === "wall") ? wallBodyWidth(h) : CFG.WALL_WIDTH;
     }
     const rail = makeBarOutlineRailS(cx, cy, len, ang, bw);
     const [sx,sy] = toScreen(o.x, o.y);
@@ -4104,8 +4189,14 @@ let wheelAccum = 0;
 const testKeys = new Set();
 const KEY_CRANK_DEG = 9, KEY_CRANK_FINE = 3;
 
+function isCrankableGrouped(o){
+  // Matches game: plate-driven excluded; deflector needs L/R; sliders without group still count (game assigns).
+  if (!CRANKABLE.has(o.type) || o.plateId != null) return false;
+  if (o.type === "deflector") return o.group === "L" || o.group === "R";
+  return true;
+}
 function startTest(){
-  const crank = level.objects.filter(o=>CRANKABLE.has(o.type) && o.plateId == null).length;
+  const crank = level.objects.filter(isCrankableGrouped).length;
   if (crank > 4){
     alert("Can't test: "+crank+" crankables (deflector + sliding wall + sliding hazard). The game asserts a max of 4.");
     return;
@@ -4263,7 +4354,9 @@ function drawSim(sim){
       case "key": case "coin": if (!obj.collected) drawKeyAtS(obj.x, obj.y); break;
       case "hazard": drawHazardBody(obj.x, obj.y, obj.radius, frame); break;
       case "wall":
-        drawWallBody(obj.x, obj.y, obj.length, obj.angle); break;
+        drawWallBody(obj.x, obj.y, obj.length, obj.angle, undefined, wallBodyWidth(obj)); break;
+      case "peg":
+        drawPegBody(obj.x, obj.y, pegRadiusOf(obj)); break;
       case "toggle_wall":
         drawWallBody(obj.x, obj.y, obj.length, obj.angle);
         drawToggleWallClock(obj.x, obj.y, obj._timer, obj.intervalFrames, obj.frameCount || 0);
@@ -4408,11 +4501,16 @@ function hitTest(sx,sy){
     else if (o.type==="key" || o.type==="coin") hit = Math.hypot(sx-cx,sy-cy) <= 8;
     else if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard"||o.type==="crawler")
       hit = Math.hypot(sx-cx,sy-cy) <= Math.max(8, o.radius||(o.type==="crawler"?CFG.CRAWLER_RADIUS_DEFAULT:CFG.HAZARD_RADIUS_DEFAULT));
+    else if (o.type==="peg")
+      hit = Math.hypot(sx-cx,sy-cy) <= pegRadiusOf(o) + 2;
     else if (o.type==="launcher") hit = Math.hypot(sx-cx,sy-cy) <= 16;
     else if (o.type==="sign") hit = Math.hypot(sx-cx,sy-cy) <= 12;
     else if (BAR_TYPES.has(o.type)){
       const [x1,y1,x2,y2] = barEndpointsScreen(cx,cy,o.length,effAngle(o,i));
-      const hw = (o.type==="deflector"||o.type==="sliding_wall") ? CFG.BAR_WIDTH/2+2 : 6;
+      let hw;
+      if (o.type==="deflector"||o.type==="sliding_wall") hw = CFG.BAR_WIDTH/2+2;
+      else if (o.type==="wall") hw = wallBodyWidth(o)/2 + 2;
+      else hw = 6;
       hit = distToSeg(sx,sy,x1,y1,x2,y2) <= hw;
     }
     if (hit) return {mode:"move", idx:i};
@@ -4477,7 +4575,7 @@ function commit(){ saveLocal(); refreshAll(); }
 function validate(){
   const errs = [], warns = [], infos = [];
   const objs = level.objects;
-  const crank = objs.filter(o=>CRANKABLE.has(o.type) && o.plateId == null).length;
+  const crank = objs.filter(isCrankableGrouped).length;
   if (crank > 4) errs.push(`Too many crankables: ${crank} (deflector + sliding wall + sliding hazard must be ≤ 4 — the game asserts).`);
   const spawns = objs.filter(o=>o.type==="spawn").length;
   if (spawns !== 1) errs.push(spawns===0 ? "No spawn — exactly one is required." : `Multiple spawns (${spawns}) — exactly one is required.`);
@@ -4517,7 +4615,10 @@ function validate(){
   objs.forEach((o,i)=>{
     if (!CRANKABLE.has(o.type) || o.plateId != null) return;
     if (o.group !== "L" && o.group !== "R"){
-      warns.push(`#${i+1} ${o.type} has no group (L/R) — game will assign by x sign.`);
+      if (o.type === "deflector")
+        infos.push(`#${i+1} deflector has no group — static blade (not crankable).`);
+      else
+        warns.push(`#${i+1} ${o.type} has no group (L/R) — game will assign by x sign.`);
       return;
     }
     grouped[o.group].push({o,i});
@@ -4572,7 +4673,8 @@ function validate(){
     } else {
       [cx,cy] = toScreen(o.x, o.y);
     }
-    const w = (o.type === "sliding_wall") ? CFG.BAR_WIDTH : CFG.WALL_WIDTH;
+    const w = (o.type === "sliding_wall") ? CFG.BAR_WIDTH
+      : (o.type === "wall") ? wallBodyWidth(o) : CFG.WALL_WIDTH;
     const len = o.length ?? CFG.WALL_SIZES[o.size || "M"] ?? CFG.WALL_SIZES.M;
     const rail = makeBarOutlineRailS(cx, cy, len, o.angle || 0, w);
     const arena = arenaRailS(resolveArenaBorders(level));
@@ -4722,15 +4824,57 @@ function renderProps(){
     }, L=>`${L}·${tbl[L]}`));
     box.appendChild(row);
   }
+  if (t === "wall"){
+    const row = document.createElement("div"); row.className="prop-row";
+    const lab = document.createElement("label"); lab.textContent="width";
+    const inp = document.createElement("input"); inp.type="number";
+    inp.min=4; inp.max=48; inp.step=1;
+    inp.value = fmtNum(wallBodyWidth(o));
+    inp.addEventListener("change", ()=>{
+      stopPlay(); pushUndo();
+      let v = parseFloat(inp.value);
+      if (!isFinite(v)) v = CFG.WALL_WIDTH;
+      v = Math.max(4, Math.min(48, v));
+      if (v === CFG.WALL_WIDTH) delete o.width; else o.width = v;
+      inp.value = fmtNum(v);
+      commit();
+    });
+    row.append(lab, inp);
+    box.appendChild(row);
+    const hint = document.createElement("div"); hint.className="hint";
+    hint.textContent = "body thickness (shelf height when angle=0); default 12";
+    box.appendChild(hint);
+  }
+  if (t === "peg"){
+    box.appendChild(propNum("radius", "radius", o, {min:12, max:100, step:1, clamp:[12,100]}));
+    const hint = document.createElement("div"); hint.className="hint";
+    hint.textContent = "filled circular peg — cling outside only; default 40";
+    box.appendChild(hint);
+  }
   if (ANGLED.has(t))
     box.appendChild(propNum("angle °", "angle", o, {step:15}));
   if (CRANKABLE.has(t) && o.plateId == null){
-    box.appendChild(propSeg("group", "group", o, ["L","R"], (G)=>{
-      o.group = G;
-    }));
-    const hint = document.createElement("div"); hint.className="hint";
-    hint.textContent = "L/R dpad selects this group; linked members share the crank";
-    box.appendChild(hint);
+    if (t === "deflector"){
+      const cur = (o.group === "L" || o.group === "R") ? o.group : "—";
+      const row = document.createElement("div"); row.className="prop-row";
+      const lab = document.createElement("label"); lab.textContent = "group";
+      row.append(lab, segControl(["—","L","R"], cur, (opt)=>{
+        stopPlay(); pushUndo();
+        if (opt === "—") delete o.group; else o.group = opt;
+        commit(); renderProps();
+      }));
+      box.appendChild(row);
+      const hint = document.createElement("div"); hint.className="hint";
+      hint.textContent = "L/R = crankable; — = static blade (omit group)";
+      box.appendChild(hint);
+    } else {
+      box.appendChild(propSeg("group", "group", o, ["L","R"], (G)=>{
+        o.group = G;
+      }));
+      const hint = document.createElement("div"); hint.className="hint";
+      hint.textContent = "L/R dpad selects this group; linked members share the crank";
+      box.appendChild(hint);
+    }
   }
   if (t === "pressure_plate"){
     box.appendChild(propNum("length", "length", o, {min:10, step:1}));
