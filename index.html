@@ -74,6 +74,8 @@
   .pal-btn:hover{border-color:var(--ink); color:var(--ink)}
   .pal-btn.armed{background:var(--pd-yellow); border-color:#111; font-weight:700}
   .pal-btn .g{width:14px; text-align:center; font-weight:700}
+  #palette.replace-pick h3{color:var(--pd-orange,#d88100)}
+  #palette.replace-pick .pal-btn:hover{background:rgba(216,129,0,.18); border-color:var(--pd-orange,#d88100)}
   /* canvas column */
   #stage{flex:1; display:flex; flex-direction:column; align-items:center; overflow:auto; padding:12px}
   #canvasWrap{position:relative; border:3px solid var(--ink); background:var(--paper); box-shadow:6px 6px 0 rgba(0,0,0,.18)}
@@ -188,7 +190,7 @@
     <button class="pal-btn" data-type="crawler"><span class="g">&#10042;</span>crawler</button>
     <button class="pal-btn" data-type="launcher"><span class="g">&#10148;</span>launcher</button>
     <button class="pal-btn" data-type="sign"><span class="g">&#8505;</span>sign</button>
-    <div class="hint" style="margin-top:8px">Click a tool, then click the arena. <br><br><kbd>Esc</kbd> cancel / deselect<br><kbd>&#8679;</kbd> fine snap<br><kbd>&#8963;/&#8984;Z</kbd> undo<br><kbd>&#8963;/&#8984;&#8679;Z</kbd> redo<br><kbd>&#8963;/&#8984;D</kbd> duplicate<br><kbd>&#9003;</kbd> delete<br>arrows nudge 5 (&#8679;=1)</div>
+    <div class="hint" style="margin-top:8px">Click a tool, then click the arena. Select an object for Duplicate / Delete / Replace (pick a type from the palette).<br><br><kbd>Esc</kbd> cancel / deselect<br><kbd>&#8679;</kbd> fine snap<br><kbd>&#8963;/&#8984;Z</kbd> undo<br><kbd>&#8963;/&#8984;&#8679;Z</kbd> redo<br><kbd>&#8963;/&#8984;D</kbd> duplicate<br><kbd>&#9003;</kbd> delete<br>arrows nudge 5 (&#8679;=1)</div>
   </nav>
 
   <div id="stage">
@@ -3422,6 +3424,7 @@ if (typeof document !== "undefined") (function(){
 let level = { name:"Untitled", theme:"Roll", tutorial:"", borders:defaultBorders(), objects:[] };
 let selIdx = -1;
 let armedTool = null;          // palette tool awaiting placement
+let replaceMode = false;       // palette pick replaces selected object
 let playing = false;
 let runtime = null;            // per-object runtime state during play
 let undoStack = [], redoStack = [];
@@ -4993,7 +4996,10 @@ function renderProps(){
   bd.addEventListener("click", ()=>duplicateSel());
   const bx = document.createElement("button"); bx.textContent="Delete";
   bx.addEventListener("click", ()=>deleteSel());
-  act.append(bd,bx);
+  const br = document.createElement("button"); br.textContent="Replace";
+  if (replaceMode) br.style.fontWeight = "700";
+  br.addEventListener("click", ()=>setReplaceMode(!replaceMode));
+  act.append(bd,bx,br);
   box.appendChild(act);
 }
 function letterOfLength(len, tbl){ return letterOfValue(len, tbl); }
@@ -5036,6 +5042,7 @@ function refreshSel(){ renderProps(); renderList(); }
 function refreshAll(){ renderProps(); renderList(); renderWarnings(); }
 function duplicateSel(){
   if (selIdx<0) return;
+  setReplaceMode(false);
   stopPlay(); pushUndo();
   const c = deepCopy(level.objects[selIdx]);
   c.x += 10; c.y -= 10;
@@ -5045,9 +5052,25 @@ function duplicateSel(){
 }
 function deleteSel(){
   if (selIdx<0) return;
+  setReplaceMode(false);
   stopPlay(); pushUndo();
   level.objects.splice(selIdx,1);
   selIdx = -1;
+  commit();
+}
+function replaceSel(newType){
+  if (selIdx < 0 || selIdx >= level.objects.length){ setReplaceMode(false); return; }
+  const old = level.objects[selIdx];
+  if (old.type === newType){ setReplaceMode(false); return; }
+  stopPlay(); pushUndo();
+  const neu = newObject(newType, old.x, old.y);
+  const keys = KNOWN_KEYS[newType] || [];
+  for (const k of keys){
+    if (k === "type" || k === "x" || k === "y") continue;
+    if (old[k] !== undefined) neu[k] = old[k];
+  }
+  level.objects[selIdx] = neu;
+  setReplaceMode(false);
   commit();
 }
 
@@ -5063,7 +5086,9 @@ cv.addEventListener("mousedown", e=>{
   if (testing) return;                 // test mode: canvas is the game screen
   const [sx,sy] = canvasScreenPos(e);
   if (playing) stopPlay();
-  if (armedTool){
+  if (replaceMode){
+    // Wait for a palette type pick; canvas clicks only reselect.
+  } else if (armedTool){
     const [cxx,cyy] = toCenter(sx,sy);
     pushUndo();
     const o = newObject(armedTool, snapV(cxx, e.shiftKey), snapV(cyy, e.shiftKey));
@@ -5074,7 +5099,10 @@ cv.addEventListener("mousedown", e=>{
     return;
   }
   const hit = hitTest(sx,sy);
-  if (!hit){ selIdx = -1; refreshSel(); return; }
+  if (!hit){
+    if (replaceMode) setReplaceMode(false);
+    selIdx = -1; refreshSel(); return;
+  }
   selIdx = hit.idx;
   const o = level.objects[selIdx];
   if (hit.mode === "move"){
@@ -5129,17 +5157,46 @@ function renderPropsSoft(){
 }
 
 /* ---------- palette ---------- */
+function setReplaceMode(on){
+  const next = !!on && selIdx >= 0;
+  const changed = next !== replaceMode;
+  replaceMode = next;
+  if (replaceMode){
+    armedTool = null;
+    document.querySelectorAll(".pal-btn").forEach(b=>b.classList.remove("armed"));
+  }
+  const pal = document.getElementById("palette");
+  if (pal){
+    pal.classList.toggle("replace-pick", replaceMode);
+    const h = pal.querySelector("h3");
+    if (h) h.textContent = replaceMode ? "Replace" : "Place";
+  }
+  if (!armedTool){
+    cv.style.cursor = replaceMode ? "pointer" : "crosshair";
+    el("stMode").textContent = replaceMode
+      ? "replace: pick a type from the palette"
+      : (playing ? "PLAY" : "");
+  }
+  if (changed) refreshSel();
+}
 function setArmed(t){
+  if (t) setReplaceMode(false);
   armedTool = t;
   document.querySelectorAll(".pal-btn").forEach(b=>{
     b.classList.toggle("armed", b.dataset.type === t);
   });
-  cv.style.cursor = t ? "copy" : "crosshair";
-  el("stMode").textContent = t ? `placing: ${t} — click the arena` : (playing?"PLAY":"");
+  cv.style.cursor = t ? "copy" : (replaceMode ? "pointer" : "crosshair");
+  el("stMode").textContent = t
+    ? `placing: ${t} — click the arena`
+    : (replaceMode ? "replace: pick a type from the palette" : (playing?"PLAY":""));
 }
 document.querySelectorAll(".pal-btn").forEach(b=>{
   b.addEventListener("click", ()=>{
     stopPlay();
+    if (replaceMode && selIdx >= 0){
+      replaceSel(b.dataset.type);
+      return;
+    }
     setArmed(armedTool === b.dataset.type ? null : b.dataset.type);
   });
 });
@@ -5186,6 +5243,7 @@ window.addEventListener("keydown", e=>{
     e.preventDefault(); duplicateSel(); return;
   }
   if (e.key==="Escape"){
+    if (replaceMode){ setReplaceMode(false); return; }
     if (armedTool) setArmed(null);
     else { selIdx=-1; refreshSel(); }
     return;
