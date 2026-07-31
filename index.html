@@ -199,6 +199,7 @@
       <span class="tgl"><input type="checkbox" id="ovKill" checked><label for="ovKill">kill radii</label></span>
       <span class="tgl"><input type="checkbox" id="ovReach" checked><label for="ovReach">deflector reach</label></span>
       <span class="tgl"><input type="checkbox" id="ovSnap"><label for="ovSnap">snap zones</label></span>
+      <span class="tgl"><input type="checkbox" id="ovHud" checked><label for="ovHud">time HUD</label></span>
     </div>
     <div id="canvasWrap"><canvas id="cv" width="800" height="480"></canvas></div>
     <div id="status">
@@ -3920,6 +3921,21 @@ function drawObject(o,i){
 }
 
 /* ---------- editor overlays ---------- */
+/** In-game TA HUD guide: live time top-left, PB top-right (mirrors main.lua). */
+function drawTimeHudGuide(){
+  if (!el("ovHud").checked) return;
+  const margin = 8;
+  const clockY = 1;
+  ctx.save();
+  ctx.fillStyle = "rgba(0,0,0,.55)";
+  ctx.font = "9px ui-monospace, Menlo, Consolas, monospace";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+  ctx.fillText("0:00.00", margin, clockY);
+  ctx.textAlign = "right";
+  ctx.fillText("PB 0:12.34", CFG.SCREEN_W - margin, clockY);
+  ctx.restore();
+}
 function objectReach(o){
   if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard") return (o.radius||14)+5;
   if (o.type==="crawler") return (o.radius||CFG.CRAWLER_RADIUS_DEFAULT||9)+5;
@@ -4095,6 +4111,7 @@ function render(){
   drawArena(resolveArenaBorders(level));
   for (let i=0;i<level.objects.length;i++) drawObject(level.objects[i], i);
   drawOverlays();
+  drawTimeHudGuide();
   if (!playing) drawSelection();
 }
 let acc = 0, lastT = 0;
@@ -4431,18 +4448,20 @@ function drawSim(sim){
     ctx.beginPath(); ctx.arc(bx,by,SIM.BALL_RADIUS+1,0,7); ctx.stroke();
   }
 
-  // HUD
+  // HUD — TA clock/PB guide first (device layout), then editor chrome below it
+  drawTimeHudGuide();
+  const hudChromeY = el("ovHud").checked ? 14 : 5;
   ctx.fillStyle = INK;
   ctx.font = "bold 9px ui-monospace, Menlo, Consolas, monospace";
   ctx.textAlign = "left"; ctx.textBaseline = "top";
   if ((g.keysTotal || 0) > 0){
-    ctx.fillText(`KEYS ${g.keysCollected}/${g.keysTotal}`, 6, 5);
+    ctx.fillText(`KEYS ${g.keysCollected}/${g.keysTotal}`, 6, hudChromeY);
   } else {
-    ctx.fillText("KEYS —", 6, 5);
+    ctx.fillText("KEYS —", 6, hudChromeY);
   }
-  ctx.fillText("R: RESTART", 6, 17);
+  ctx.fillText("R: RESTART", 6, hudChromeY + 12);
   ctx.textAlign = "right";
-  ctx.fillText(sim.selectionLabel(), 394, 5);
+  ctx.fillText(sim.selectionLabel(), 394, hudChromeY);
   ctx.textAlign = "left";
 
   // Tutorial bar
