@@ -1751,6 +1751,7 @@ function createClingSim(level){
     jumpIgnoreFrames:0, jumpRising:false, jumpCutArmed:false,
     jumpLaunchX:null, jumpLaunchY:null, fromJump:false,
     jumpCoyoteFrames:0, jumpCoyoteS:null, jumpCoyoteRail:null,
+    squashTimer:0, squashDuration:5, squashAmp:1, squashNx:0, squashNy:-1, squashFresh:false,
     mode:"cling", dockedLauncher:null,
     ignoreLauncher:null, ignoreLauncherFrames:0,
     flightX:0, flightY:0, flightVx:0, flightVy:0, flightGrace:0,
@@ -1872,6 +1873,7 @@ function createClingSim(level){
     ball.dropOriginY = null; ball.dropFromRailIndex = null; ball.fallStartY = null;
     ball.jumpIgnoreFrames = 0; ball.jumpRising = false; ball.jumpCutArmed = false;
     ball.jumpLaunchX = null; ball.jumpLaunchY = null; ball.fromJump = false;
+    ball.squashTimer = 0; ball.squashAmp = 1; ball.squashFresh = false;
     clearJumpCoyote();
     ball.mode = "cling"; ball.dockedLauncher = null;
     ball.ignoreLauncher = null; ball.ignoreLauncherFrames = 0;
@@ -3013,11 +3015,27 @@ function createClingSim(level){
       return true;
     }
     if (ball.mode !== "cling") return false;
-    // Refuse only on the screen-bottom floor; drop is allowed with or without a
-    // landable face further along gravity.
-    if (isOnArenaFloor()) return false;
+    // Arena floor: already standing on the ground.
+    // Solid top faces: dropping would phase through the filled body.
+    // Undersides/sides of solids, and thin blades, still drop (let go / drop-through).
+    // No peek at landable faces further along gravity — Down commits either way.
+    if (isOnArenaFloor()
+      || (isExteriorSolidRail(game.rails[ball.rail])
+          && clingFaceIsLandable(ball.rail, ball.s))){
+      beginDropDenySquash();
+      return false;
+    }
     beginFallFromCling();
     return true;
+  }
+  function beginDropDenySquash(){
+    // Match config CLING_FX_DROP_DENY_SQUASH_* — flatten along gravity, no dust.
+    ball.squashNx = 0;
+    ball.squashNy = -1;
+    ball.squashTimer = 4;
+    ball.squashDuration = 4;
+    ball.squashAmp = 0.55;
+    ball.squashFresh = true;
   }
   function avgCrankDeltaS(){
     const h = ball.crankDeltaHist || [0,0,0,0];
@@ -3735,6 +3753,10 @@ function createClingSim(level){
 
     if (!game.levelComplete && exitReached){
       game.levelComplete = true;
+    }
+    if (ball.squashTimer > 0){
+      if (ball.squashFresh) ball.squashFresh = false;
+      else ball.squashTimer--;
     }
   }
   function selectionLabel(){
@@ -4813,10 +4835,37 @@ function drawSim(sim){
   if (ballSelected) drawSelectionHighlightS(bx, by, g.frameCount);
   const flashHide = ball.respawnFlash > 0 && (ball.frameCount % 2) === 0;
   if (!flashHide){
+    const r = SIM.BALL_RADIUS;
     ctx.fillStyle = INK;
-    ctx.beginPath(); ctx.arc(bx,by,SIM.BALL_RADIUS,0,7); ctx.fill();
-    ctx.strokeStyle = INK; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.arc(bx,by,SIM.BALL_RADIUS+1,0,7); ctx.stroke();
+    ctx.strokeStyle = INK;
+    ctx.lineWidth = 1;
+    if (ball.squashTimer > 0){
+      const frames = Math.max(1, ball.squashDuration || 4);
+      const u = 1 - (ball.squashTimer / frames);
+      const amp = (ball.squashAmp == null) ? 1 : ball.squashAmp;
+      let sn, st;
+      if (u < 0.75){
+        const k = u / 0.75;
+        sn = 0.7 + (1.08 - 0.7) * k;
+        st = 1.3 + (0.94 - 1.3) * k;
+      } else {
+        const k = (u - 0.75) / 0.25;
+        sn = 1.08 + (1.0 - 1.08) * k;
+        st = 0.94 + (1.0 - 0.94) * k;
+      }
+      sn = 1 + (sn - 1) * amp;
+      st = 1 + (st - 1) * amp;
+      const angle = Math.atan2(ball.squashNy || -1, ball.squashNx || 0);
+      ctx.save();
+      ctx.translate(bx, by);
+      ctx.rotate(angle);
+      ctx.beginPath(); ctx.ellipse(0, 0, r * sn, r * st, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(0, 0, r * sn + 1, r * st + 1, 0, 0, Math.PI * 2); ctx.stroke();
+      ctx.restore();
+    } else {
+      ctx.beginPath(); ctx.arc(bx, by, r, 0, 7); ctx.fill();
+      ctx.beginPath(); ctx.arc(bx, by, r + 1, 0, 7); ctx.stroke();
+    }
   }
 
   // HUD — TA clock/PB guide first (device layout), then editor chrome below it
