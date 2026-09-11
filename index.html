@@ -2992,9 +2992,6 @@ function createClingSim(level){
     setRollingPolarity(railIndex, ball.s, fromX, fromY);
     logPolarityAttach("fall", oldPol, railIndex);
   }
-  function hasLandableBelow(cx, cy){
-    return findFallLanding(cx, cy + 0.5, null, false) != null;
-  }
   function tryDrop(){
     if (game.levelComplete) return false;
     game.selTarget = "cling";
@@ -3016,13 +3013,9 @@ function createClingSim(level){
       return true;
     }
     if (ball.mode !== "cling") return false;
-    let refused = false;
-    if (isOnArenaFloor()) refused = true;
-    else {
-      const [px,py] = worldPos();
-      if (!hasLandableBelow(px,py)) refused = true;
-    }
-    if (refused) return false;
+    // Refuse only on the screen-bottom floor; drop is allowed with or without a
+    // landable face further along gravity.
+    if (isOnArenaFloor()) return false;
     beginFallFromCling();
     return true;
   }
