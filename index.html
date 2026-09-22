@@ -197,6 +197,7 @@
     <button class="pal-btn" data-type="moving_hazard"><span class="g">&#10042;</span>moving hazard</button>
     <button class="pal-btn" data-type="sliding_hazard"><span class="g">&#10042;</span>sliding hazard</button>
     <button class="pal-btn" data-type="pressure_plate"><span class="g">&#9632;</span>pressure plate</button>
+    <button class="pal-btn" data-type="ballast"><span class="g">&#9679;</span>ballast</button>
     <button class="pal-btn" data-type="crawler"><span class="g">&#10042;</span>crawler</button>
     <button class="pal-btn" data-type="launcher"><span class="g">&#10148;</span>launcher</button>
     <button class="pal-btn" data-type="sign"><span class="g">&#8505;</span>sign</button>
@@ -305,6 +306,10 @@ const CFG = {
   PLATE_PRESS_DIST: 6,
   PLATE_DRIVE_SPEED: 0.02,
   PLATE_RELEASE_GRACE_FRAMES: 2,
+  PLATE_TRIGGER_HOLD_FRAMES: 60,
+  PLATE_TRIGGER_WARN_FRAMES: 15,
+  PLATE_TRIGGER_CLOCK_R: 8,
+  BALLAST_RADIUS: 8,
 
   // Accelerometer / gravity remap (editor tilt slider).
   ACCEL_SLIDER_GRAVITY: 0.45,
@@ -328,7 +333,7 @@ function launcherScreenAngle(authored){
 }
 
 const BAR_TYPES = new Set(["wall","deflector","sweeper","toggle_wall","sliding_wall","moving_wall","pressure_plate"]);
-const SLIDE_TYPES = new Set(["sliding_wall","moving_wall","moving_hazard","sliding_hazard"]);
+const SLIDE_TYPES = new Set(["sliding_wall","moving_wall","moving_hazard","sliding_hazard","ballast"]);
 const SOLID_CRAWLER_HOSTS = new Set(["wall","moving_wall","toggle_wall","sliding_wall"]);
 // Dpad-selectable crank targets only. Launchers dock on contact (not selectable).
 const CRANKABLE = new Set(["deflector","sliding_wall","sliding_hazard"]);
@@ -449,6 +454,9 @@ function newObject(type, x, y){
       o.group = (x < 0) ? "L" : "R"; break;
     case "pressure_plate":
       o.length = 40; o.angle = 0; o.link = 1; o.mode = "hold"; break;
+    case "ballast":
+      o.radius = CFG.BALLAST_RADIUS || 8; o.slideAngle = 0;
+      o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5; break;
     case "crawler":
       o.radius = CFG.CRAWLER_RADIUS_DEFAULT; o.direction = 1;
       o.startPosition = 0; o.speed = "M"; break;
@@ -531,7 +539,8 @@ const EXPORT_SPEC = {
   moving_wall:  {l1:["x","y","length","angle"], l2:["slideAngle","slideRange","objectPosition","speed"]},
   moving_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","speed"]},
   sliding_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"]},
-  pressure_plate:{l1:["x","y","length","angle"], l2:["link","mode"]},
+  pressure_plate:{l1:["x","y","length","angle"], l2:["link","mode","holdFrames"]},
+  ballast:      {l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition"]},
   crawler:      {l1:["x","y","radius"], l2:["direction","startPosition","speed"]},
   sign:         {l1:["x","y"], l2:["text","textPos"]},
 };
@@ -715,7 +724,7 @@ function parseLuaText(src){
 }
 
 // slideRange/speed intentionally omitted: letter strings must survive for legacy conversion.
-const NUMERIC_KEYS = new Set(["x","y","length","angle","width","radius","minAngle","maxAngle","angleStep","slideAngle","objectPosition","slidePosition","minSlide","maxSlide","slideOffset","maxOpen","direction","startPosition","link","plateId","pressedPosition"]);
+const NUMERIC_KEYS = new Set(["x","y","length","angle","width","radius","minAngle","maxAngle","angleStep","slideAngle","objectPosition","slidePosition","minSlide","maxSlide","slideOffset","maxOpen","direction","startPosition","link","holdFrames","plateId","pressedPosition"]);
 const KNOWN_KEYS = {
   spawn:["x","y"],
   exit:["x","y"],
@@ -731,7 +740,8 @@ const KNOWN_KEYS = {
   moving_wall:["x","y","length","angle","slideAngle","slideRange","objectPosition","speed"],
   moving_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","speed"],
   sliding_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"],
-  pressure_plate:["x","y","length","angle","link","mode"],
+  ballast:["x","y","radius","slideAngle","slideRange","objectPosition"],
+  pressure_plate:["x","y","length","angle","link","mode","holdFrames"],
   crawler:["x","y","radius","direction","startPosition","speed"],
   sign:["x","y","text","textPos"],
 };
@@ -760,7 +770,8 @@ const LEVEL_CODEC = {
   moving_wall:["x","y","length","angle","slideAngle","slideRange","objectPosition","speed"],
   moving_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","speed"],
   sliding_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"],
-  pressure_plate:["x","y","length","angle","link","mode"],
+  ballast:["x","y","radius","slideAngle","slideRange","objectPosition"],
+  pressure_plate:["x","y","length","angle","link","mode","holdFrames"],
   crawler:["x","y","radius","direction","startPosition","speed"],
   sign:["x","y","text","textPos"],
 },
@@ -779,6 +790,7 @@ const LEVEL_CODEC = {
   moving_wall:"mw",
   moving_hazard:"mh",
   sliding_hazard:"sh",
+  ballast:"ba",
   pressure_plate:"pp",
   crawler:"cr",
   sign:"sg",
@@ -798,6 +810,7 @@ const LEVEL_CODEC = {
   "mw":"moving_wall",
   "mh":"moving_hazard",
   "sh":"sliding_hazard",
+  "ba":"ballast",
   "pp":"pressure_plate",
   "cr":"crawler",
   "sg":"sign",
@@ -814,11 +827,12 @@ const LEVEL_CODEC = {
   moving_wall:{length:70,angle:0,slideAngle:0,slideRange:60,objectPosition:0.5,speed:0.008},
   moving_hazard:{radius:15,slideAngle:0,slideRange:60,objectPosition:0.5,speed:0.008},
   sliding_hazard:{radius:15,slideAngle:0,slideRange:60,objectPosition:0.5},
-  pressure_plate:{length:40,angle:0,link:1,mode:"hold"},
+  ballast:{radius:8,slideAngle:0,slideRange:60,objectPosition:0.5},
+  pressure_plate:{length:40,angle:0,link:1,mode:"hold",holdFrames:60},
   crawler:{radius:10,direction:1,startPosition:0,speed:"M"},
   sign:{text:"Hint text",textPos:"bottom"},
 },
-  NUMERIC_KEYS: new Set(["angle","angleStep","direction","length","link","maxAngle","maxOpen","maxSlide","minAngle","minSlide","objectPosition","plateId","pressedPosition","radius","slideAngle","slideOffset","slidePosition","startPosition","width","x","y"]),
+  NUMERIC_KEYS: new Set(["angle","angleStep","direction","holdFrames","length","link","maxAngle","maxOpen","maxSlide","minAngle","minSlide","objectPosition","plateId","pressedPosition","radius","slideAngle","slideOffset","slidePosition","startPosition","width","x","y"]),
   POS01_KEYS: new Set(["objectPosition","startPosition"]),
   LETTER_OR_NUMBER_KEYS: new Set(["slideRange","speed"]),
   STRING_KEYS: new Set(["group","mode","text","textPos"]),
@@ -1187,7 +1201,7 @@ function importLevelFromLua(text){
 }
 
 /* ---------- built-in level library (verbatim from levels.lua) ---------- */
-const BUILTIN_LEVELS = [{"n":1,"name":"First Roll","lua":"{ name = \"First Roll\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    tutorial = \"Crank = roll.\",\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"key\", x = 0, y = -100 },\n    { type = \"key\", x = 180, y = 0 },\n    { type = \"key\", x = 0, y = 100 },\n    { type = \"exit\", x = -175, y = 60 },\n  }}"},{"n":2,"name":"Step Down","lua":"{ name = \"Step Down\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Down = DROP\",\n    objects = {\n    { type = \"spawn\", x = -150, y = 70 },\n    { type = \"deflector\", x = -100, y = 70, length = 100, angle = 0 },\n    { type = \"deflector\", x = 0, y = 0, length = 140, angle = 0 },\n    { type = \"deflector\", x = 100, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -60, y = 80 },\n    { type = \"key\", x = 0, y = 10 },\n    { type = \"key\", x = 65, y = -60 },\n    { type = \"exit\", x = 140, y = -60 },\n  }}"},{"n":3,"name":"Step Up","lua":"{ name = \"Step Up\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Up = JUMP\",\n    objects = {\n    { type = \"spawn\", x = -140, y = -50 },\n    { type = \"wall\", x = 0, y = 0, length = 140, angle = 0, width = 15 },\n    { type = \"wall\", x = -100, y = -65, length = 100, angle = 0, width = 15 },\n    { type = \"wall\", x = 100, y = 65, length = 100, angle = 0, width = 15 },\n    { type = \"key\", x = -60, y = -50 },\n    { type = \"key\", x = 0, y = 15 },\n    { type = \"key\", x = 60, y = 80 },\n    { type = \"exit\", x = 140, y = 80 },\n  }}"},{"n":4,"name":"Teeter Totter","lua":"{ name = \"Teeter Totter\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"LEFT = Control Objects\",\n    objects = {\n    { type = \"spawn\", x = -150, y = 0 },\n    { type = \"key\", x = 0, y = 5 },\n    { type = \"exit\", x = 150, y = 5 },\n    { type = \"deflector\", x = 0, y = -5, length = 320, angle = 0 },\n    { type = \"sliding_hazard\", x = -75, y = 30, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0, group = \"L\" },\n    { type = \"sliding_hazard\", x = 75, y = -30, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0, group = \"L\" },\n  }}"},{"n":5,"name":"NewDesign 1","lua":"{ name = \"NewDesign 1\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = 25 },\n    { type = \"key\", x = -160, y = -10 },\n    { type = \"key\", x = 160, y = -10 },\n    { type = \"key\", x = 0, y = 30 },\n    { type = \"exit\", x = 150, y = 85 },\n    { type = \"deflector\", x = 0, y = -30, length = 120, angle = 0, group = \"L\" },\n    { type = \"deflector\", x = -160, y = 25, length = 70, angle = 0 },\n    { type = \"deflector\", x = 150, y = -40, length = 70, angle = 330 },\n    { type = \"deflector\", x = -150, y = -40, length = 70, angle = 30 },\n    { type = \"wall\", x = 150, y = 65, length = 70, angle = 0 },\n  }}"},{"n":6,"name":"Gravity Gym","lua":"{ name = \"Gravity Gym\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"TILT to slide, FLIP gravity\",\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -150, y = -70, length = 60, angle = 0 },\n    { type = \"sliding_wall\", x = -115, y = -78, length = 60, angle = 0, slideAngle = 0, slideRange = 25, objectPosition = 0.0, group = \"L\" },\n    { type = \"deflector\", x = -10, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -30, y = -50 },\n    { type = \"deflector\", x = 70, y = -70, length = 80, angle = 0 },\n    { type = \"sliding_hazard\", x = 60, y = -25, radius = 20, slideAngle = 90, slideRange = 40, objectPosition = 1.0, group = \"R\" },\n    { type = \"key\", x = 100, y = -52 },\n    { type = \"deflector\", x = 162, y = -100, length = 36, angle = 0 },\n    { type = \"key\", x = 162, y = -90 },\n    { type = \"exit\", x = 170, y = -100 },\n  }}"}];
+const BUILTIN_LEVELS = [{"n":1,"name":"First Roll","lua":"{ name = \"First Roll\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    tutorial = \"Crank = roll.\",\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"key\", x = 0, y = -100 },\n    { type = \"key\", x = 180, y = 0 },\n    { type = \"key\", x = 0, y = 100 },\n    { type = \"exit\", x = -175, y = 60 },\n  }}"},{"n":2,"name":"Step Down","lua":"{ name = \"Step Down\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Down = DROP\",\n    objects = {\n    { type = \"spawn\", x = -150, y = 70 },\n    { type = \"deflector\", x = -100, y = 70, length = 100, angle = 0 },\n    { type = \"deflector\", x = 0, y = 0, length = 140, angle = 0 },\n    { type = \"deflector\", x = 100, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -60, y = 80 },\n    { type = \"key\", x = 0, y = 10 },\n    { type = \"key\", x = 65, y = -60 },\n    { type = \"exit\", x = 140, y = -60 },\n  }}"},{"n":3,"name":"Step Up","lua":"{ name = \"Step Up\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Up = JUMP\",\n    objects = {\n    { type = \"spawn\", x = -140, y = -50 },\n    { type = \"wall\", x = 0, y = 0, length = 140, angle = 0, width = 15 },\n    { type = \"wall\", x = -100, y = -65, length = 100, angle = 0, width = 15 },\n    { type = \"wall\", x = 100, y = 65, length = 100, angle = 0, width = 15 },\n    { type = \"key\", x = -60, y = -50 },\n    { type = \"key\", x = 0, y = 15 },\n    { type = \"key\", x = 60, y = 80 },\n    { type = \"exit\", x = 140, y = 80 },\n  }}"},{"n":4,"name":"Teeter Totter","lua":"{ name = \"Teeter Totter\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"LEFT = Control Objects\",\n    objects = {\n    { type = \"spawn\", x = -150, y = 0 },\n    { type = \"key\", x = 0, y = 5 },\n    { type = \"exit\", x = 150, y = 5 },\n    { type = \"deflector\", x = 0, y = -5, length = 320, angle = 0 },\n    { type = \"sliding_hazard\", x = -75, y = 30, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0, group = \"L\" },\n    { type = \"sliding_hazard\", x = 75, y = -30, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0, group = \"L\" },\n  }}"},{"n":5,"name":"NewDesign 1","lua":"{ name = \"NewDesign 1\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = 25 },\n    { type = \"key\", x = -160, y = -10 },\n    { type = \"key\", x = 160, y = -10 },\n    { type = \"key\", x = 0, y = 30 },\n    { type = \"exit\", x = 150, y = 85 },\n    { type = \"deflector\", x = 0, y = -30, length = 120, angle = 0, group = \"L\" },\n    { type = \"deflector\", x = -160, y = 25, length = 70, angle = 0 },\n    { type = \"deflector\", x = 150, y = -40, length = 70, angle = 330 },\n    { type = \"deflector\", x = -150, y = -40, length = 70, angle = 30 },\n    { type = \"wall\", x = 150, y = 65, length = 70, angle = 0 },\n  }}"},{"n":6,"name":"Gravity Gym","lua":"{ name = \"Gravity Gym\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"TILT to slide, FLIP gravity\",\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -150, y = -70, length = 60, angle = 0 },\n    { type = \"sliding_wall\", x = -115, y = -78, length = 60, angle = 0, slideAngle = 0, slideRange = 25, objectPosition = 0.0, group = \"L\" },\n    { type = \"deflector\", x = -10, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -30, y = -50 },\n    { type = \"deflector\", x = 70, y = -70, length = 80, angle = 0 },\n    { type = \"sliding_hazard\", x = 60, y = -25, radius = 20, slideAngle = 90, slideRange = 40, objectPosition = 1.0, group = \"R\" },\n    { type = \"key\", x = 100, y = -52 },\n    { type = \"deflector\", x = 162, y = -100, length = 36, angle = 0 },\n    { type = \"key\", x = 162, y = -90 },\n    { type = \"exit\", x = 170, y = -100 },\n  }}"},{"n":7,"name":"Tripwire","lua":"{ name = \"Tripwire\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Roll the plate. Beat the door.\",\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -125, y = -70, length = 90, angle = 0 },\n    { type = \"pressure_plate\", x = -60, y = -70, length = 36, angle = 0, link = 1, mode = \"trigger\", holdFrames = 40 },\n    { type = \"deflector\", x = -21, y = -70, length = 40, angle = 0 },\n    { type = \"sliding_wall\", x = 1, y = -15, length = 80, angle = 90, slideAngle = 90, slideRange = 40, objectPosition = 1.0, plateId = 1, pressedPosition = 0.0 },\n    { type = \"deflector\", x = 89, y = -70, length = 176, angle = 0 },\n    { type = \"key\", x = 50, y = -55 },\n    { type = \"exit\", x = 160, y = -70 },\n  }}"},{"n":8,"name":"Counterweight","lua":"{ name = \"Counterweight\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"TILT the weight onto the plate.\",\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -125, y = -70, length = 90, angle = 0 },\n    { type = \"deflector\", x = -21, y = -70, length = 40, angle = 0 },\n    { type = \"sliding_wall\", x = 1, y = -15, length = 80, angle = 90, slideAngle = 90, slideRange = 40, objectPosition = 1.0, plateId = 1, pressedPosition = 0.0 },\n    { type = \"deflector\", x = 89, y = -70, length = 176, angle = 0 },\n    { type = \"ballast\", x = -40, y = 20, radius = 8, slideAngle = 0, slideRange = 50, objectPosition = 0.0 },\n    { type = \"pressure_plate\", x = 10, y = 20, length = 28, angle = 0, link = 1, mode = \"hold\" },\n    { type = \"key\", x = 50, y = -55 },\n    { type = \"exit\", x = 160, y = -70 },\n  }}"},{"n":9,"name":"Two Banks","lua":"{ name = \"Two Banks\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Tilt each way. Latches stay.\",\n    objects = {\n    { type = \"spawn\", x = -160, y = -70 },\n    { type = \"deflector\", x = -140, y = -70, length = 80, angle = 0 },\n    { type = \"sliding_wall\", x = -99, y = -15, length = 80, angle = 90, slideAngle = 90, slideRange = 40, objectPosition = 1.0, plateId = 1, pressedPosition = 0.0 },\n    { type = \"deflector\", x = -50, y = -70, length = 96, angle = 0 },\n    { type = \"sliding_wall\", x = -1, y = -15, length = 80, angle = 90, slideAngle = 90, slideRange = 40, objectPosition = 1.0, plateId = 2, pressedPosition = 0.0 },\n    { type = \"deflector\", x = 70, y = -70, length = 140, angle = 0 },\n    { type = \"deflector\", x = -100, y = 10, length = 80, angle = 0, group = \"L\" },\n    { type = \"pressure_plate\", x = -69, y = -16, length = 24, angle = 40, link = 1, mode = \"latch\" },\n    { type = \"deflector\", x = 70, y = 10, length = 80, angle = 0, group = \"L\" },\n    { type = \"pressure_plate\", x = 101, y = 36, length = 24, angle = -40, link = 2, mode = \"latch\" },\n    { type = \"key\", x = -40, y = -55 },\n    { type = \"exit\", x = 120, y = -70 },\n  }}"}];
 /* =====================================================================
    GAMEPLAY SIMULATION — faithful port of rails.lua + cling_ball.lua +
    the game glue in main.lua. Screen space (Y-down). Rails arrays are
@@ -1259,6 +1273,10 @@ const SIM = {
   PLATE_PRESS_DIST: 6,
   PLATE_DRIVE_SPEED: 0.02,
   PLATE_RELEASE_GRACE_FRAMES: 2,
+  PLATE_TRIGGER_HOLD_FRAMES: 60,
+  PLATE_TRIGGER_WARN_FRAMES: 15,
+  PLATE_TRIGGER_CLOCK_R: 8,
+  BALLAST_RADIUS: 8,
 
   // Gravity-driven sliders (px/frame along the rail).
   ACCEL_SLIDER_GRAVITY: 0.45,
@@ -1795,9 +1813,24 @@ function makeSimObjects(level){
         o.length = a.length ?? 40;
         o.angle = a.angle || 0;
         o.link = a.link ?? 1;
-        o.mode = (a.mode === "latch") ? "latch" : "hold";
+        o.mode = (a.mode === "latch" || a.mode === "trigger") ? a.mode : "hold";
         o.pressed = false; o.latched = false;
         o.releaseGrace = 0; o.flashTimer = 0; o.frameCount = 0;
+        o.phase = "idle";
+        o.holdTimer = 0;
+        o.holdFrames = (typeof a.holdFrames === "number" && a.holdFrames >= 0)
+          ? a.holdFrames : (CFG.PLATE_TRIGGER_HOLD_FRAMES || 60);
+        break;
+      }
+      case "ballast": {
+        o.radius = a.radius ?? (CFG.BALLAST_RADIUS || 8);
+        o.slideAngle = a.slideAngle || 0;
+        const sp = slideSpan(a);
+        o.minSlide = -sp; o.maxSlide = sp;
+        o.objectPosition = Math.max(0, Math.min(1, a.objectPosition ?? 0.5));
+        o._slideVel = 0;
+        o.plateDriven = false;
+        o._cfg = { objectPosition: o.objectPosition };
         break;
       }
       case "launcher": o.angle = launcherScreenAngle(a.angle||0); break;
@@ -1844,6 +1877,13 @@ function simGetRail(o){
         cx += -Math.sin(a)*dep; cy += Math.cos(a)*dep;
       }
       return makeBarOutlineRailS(cx, cy, o.length, o.angle, SIM.PLATE_WIDTH || 8);
+    }
+    case "ballast": {
+      const r = rad(o.slideAngle||0);
+      return { closed:false, pts:[
+        {x:o.x+Math.cos(r)*o.minSlide, y:o.y+Math.sin(r)*o.minSlide},
+        {x:o.x+Math.cos(r)*o.maxSlide, y:o.y+Math.sin(r)*o.maxSlide},
+      ]};
     }
   }
   return null;
@@ -2072,6 +2112,7 @@ function createClingSim(level){
   function crank(change){
     if (ball.mode !== "cling") return;
     if (Math.abs(change) <= 0.1) return;
+    ball.prevS = ball.s;
     const polarity = ball.crankPolarity || 1;
     const delta = change * SIM.BALL_CRANK_SENS * polarity;
     ball.s += delta;
@@ -3846,14 +3887,46 @@ function createClingSim(level){
       const p1=rail.pts[0], p2=rail.pts[1];
       if (segmentSegmentDistS(p1.x,p1.y,p2.x,p2.y,fx1,fy1,fx2,fy2) <= pressDist) return true;
     }
+    for (const obj of objects){
+      if (obj.type !== "ballast") continue;
+      const [bx,by] = simSlideCenter(obj);
+      if (distPointToSegmentS(bx,by,fx1,fy1,fx2,fy2) <= pressDist) return true;
+    }
     return false;
+  }
+  function plateDrivePose(plate, obj){
+    if (plate.mode === "trigger"){
+      if (plate.phase === "firing" || plate.phase === "holding") return obj.pressedPosition;
+      return obj.restPosition;
+    }
+    return (plate.pressed || plate.latched) ? obj.pressedPosition : obj.restPosition;
+  }
+  function triggerTargetsSettled(plate, field){
+    let n = 0;
+    for (const obj of objects){
+      if (!obj.plateDriven || obj.plateId !== plate.link) continue;
+      n++;
+      const goal = obj[field];
+      if (goal == null || Math.abs((obj.objectPosition||0) - goal) > 0.0001) return false;
+    }
+    return n > 0;
   }
   function stepPressurePlates(){
     const graceMax = SIM.PLATE_RELEASE_GRACE_FRAMES || 2;
     for (const plate of objects){
       if (plate.type !== "pressure_plate") continue;
       const raw = detectPlateWeightS(plate);
-      if (raw){
+      if (plate.mode === "trigger"){
+        if (plate.phase === "idle" && raw && !plate.pressed){
+          plate.pressed = true;
+          plate.flashTimer = 1;
+          plate.phase = "firing";
+          plate.holdTimer = 0;
+        } else if (plate.phase === "holding"){
+          plate.holdTimer = (plate.holdTimer||0) - 1;
+          if (plate.holdTimer <= 0) plate.phase = "returning";
+        }
+      } else if (raw){
         plate.releaseGrace = 0;
         if (!plate.pressed && !plate.latched){
           plate.pressed = true;
@@ -3872,8 +3945,7 @@ function createClingSim(level){
       if (!obj.plateDriven || obj.plateId == null) continue;
       const plate = objects.find(p=>p.type==="pressure_plate" && p.link===obj.plateId);
       if (!plate) continue;
-      const active = plate.pressed || plate.latched;
-      const target = active ? obj.pressedPosition : obj.restPosition;
+      const target = plateDrivePose(plate, obj);
       const delta = target - obj.objectPosition;
       if (Math.abs(delta) < 0.0001) continue;
       const [prevCx,prevCy] = simSlideCenter(obj);
@@ -3883,6 +3955,21 @@ function createClingSim(level){
       buildRails();
       if (obj.type === "sliding_wall")
         resolveSolidSweep(obj, newCx-prevCx, newCy-prevCy, false);
+    }
+    for (const plate of objects){
+      if (plate.type !== "pressure_plate" || plate.mode !== "trigger") continue;
+      if (plate.phase === "firing"){
+        if (triggerTargetsSettled(plate, "pressedPosition")){
+          plate.phase = "holding";
+          plate.holdTimer = plate.holdFrames ?? (CFG.PLATE_TRIGGER_HOLD_FRAMES || 60);
+        }
+      } else if (plate.phase === "returning"){
+        if (triggerTargetsSettled(plate, "restPosition") && !detectPlateWeightS(plate)){
+          plate.phase = "idle";
+          plate.pressed = false;
+          plate.holdTimer = 0;
+        }
+      }
     }
   }
   function bindCrawlerHosts(){
@@ -3957,6 +4044,11 @@ function createClingSim(level){
         }
       }
     }
+    for (const obj of objects){
+      if (obj.type !== "ballast") continue;
+      const target = stepSliderGravity(obj, rollDeg);
+      if (target != null) obj.objectPosition = target;
+    }
   }
   function applyCrankToObject(obj, change){
     if (obj.plateDriven) return;
@@ -4019,6 +4111,40 @@ function createClingSim(level){
     if (!members) return;
     for (const obj of members) applyCrankToObject(obj, change);
   }
+  function pushBallastFromCrank(){
+    if (ball.mode !== "cling") return;
+    const owner = (game.railOwners || [])[ball.rail];
+    if (!owner || owner.type !== "ballast") return;
+    const span = (owner.maxSlide || 0) - (owner.minSlide || 0);
+    if (span <= 1e-6) return;
+    const prevS = ball.prevS ?? ball.s ?? 0;
+    const ballS = ball.s || 0;
+    const delta = ballS - prevS;
+    if (Math.abs(delta) < 1e-4) return;
+    const contact = (SIM.BALL_RADIUS || 5) + (owner.radius || CFG.BALLAST_RADIUS || 8);
+    const beadS = (owner.objectPosition || 0) * span;
+    let newPos, pinned;
+    if (delta > 0){
+      const limit = beadS - contact;
+      if (!(ballS > limit && prevS <= beadS)) return;
+      newPos = (beadS + (ballS - limit)) / span;
+      if (newPos < (owner.objectPosition || 0)) return;
+    } else {
+      const limit = beadS + contact;
+      if (!(ballS < limit && prevS >= beadS)) return;
+      newPos = (beadS - (limit - ballS)) / span;
+      if (newPos > (owner.objectPosition || 0)) return;
+    }
+    if (newPos < 0) newPos = 0; else if (newPos > 1) newPos = 1;
+    owner.objectPosition = newPos;
+    owner._slideVel = 0;
+    pinned = delta > 0 ? newPos * span - contact : newPos * span + contact;
+    const rail = game.rails[ball.rail];
+    const len = rail ? RL.length(rail) : span;
+    if (pinned < 0) pinned = 0;
+    if (pinned > len) pinned = len;
+    ball.s = pinned;
+  }
   function handleCrank(change){
     if (Math.abs(change) <= 0.1) return;
     if (game.levelComplete) return;
@@ -4032,7 +4158,10 @@ function createClingSim(level){
       else airCrank(change);
       return;
     }
-    if (game.selTarget === "cling") crank(change);
+    if (game.selTarget === "cling"){
+      crank(change);
+      pushBallastFromCrank();
+    }
     else if (game.selTarget === "L" || game.selTarget === "R") crankSelectedGroup(change);
   }
   function restartLevel(){
@@ -4049,13 +4178,14 @@ function createClingSim(level){
       if (obj.type === "pressure_plate"){
         obj.pressed = false; obj.latched = false;
         obj.releaseGrace = 0; obj.flashTimer = 0;
+        obj.phase = "idle"; obj.holdTimer = 0;
       }
       if (obj.plateDriven){
         obj.objectPosition = obj.restPosition;
       }
       if (obj._cfg){
         if (obj.type === "deflector" && obj._cfg.angle != null) obj.angle = obj._cfg.angle;
-        if ((obj.type === "sliding_wall" || obj.type === "sliding_hazard")
+        if ((obj.type === "sliding_wall" || obj.type === "sliding_hazard" || obj.type === "ballast")
             && obj._cfg.objectPosition != null){
           obj.objectPosition = obj._cfg.objectPosition;
           obj._slideVel = 0;
@@ -4291,6 +4421,89 @@ function drawToggleWallClock(cx,cy,timer,intervalFrames,frameCount){
     ctx.beginPath(); ctx.arc(cx, cy, r - 1, 0, Math.PI*2); ctx.fill();
   }
 }
+/** Hold stays the solid fill. Latch cuts a bolt slot (spent = white + slash).
+    Trigger punches the face hollow and stamps a pip. */
+function drawPlateModeMark(corner, cx, cy, ux, uy, px, py, hL, hW, mode, latched, phase){
+  if (mode === "trigger"){
+    const poly = (pts)=>{
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath();
+    };
+    ctx.fillStyle = "#fff";
+    poly([corner(-hL+1.5,-hW+1.5), corner(hL-1.5,-hW+1.5), corner(hL-1.5,hW-1.5), corner(-hL+1.5,hW-1.5)]);
+    ctx.fill();
+    const tip = (phase && phase !== "idle") ? 3.2 : 2.2;
+    ctx.fillStyle = INK;
+    ctx.beginPath();
+    ctx.moveTo(cx+ux*tip, cy+uy*tip);
+    ctx.lineTo(cx-ux*tip*0.55+px*tip*0.65, cy-uy*tip*0.55+py*tip*0.65);
+    ctx.lineTo(cx-ux*tip*0.55-px*tip*0.65, cy-uy*tip*0.55-py*tip*0.65);
+    ctx.closePath(); ctx.fill();
+  } else if (mode === "latch" && latched){
+    const poly = (pts)=>{
+      ctx.beginPath();
+      ctx.moveTo(pts[0][0], pts[0][1]);
+      for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+      ctx.closePath();
+    };
+    ctx.fillStyle = "#fff";
+    poly([corner(-hL,-hW), corner(hL,-hW), corner(hL,hW), corner(-hL,hW)]);
+    ctx.fill();
+    const [x1,y1] = corner(-hL,-hW), [x2,y2] = corner(hL,-hW);
+    const [x3,y3] = corner(hL,hW), [x4,y4] = corner(-hL,hW);
+    ctx.strokeStyle = INK; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x3,y3); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(x2,y2); ctx.lineTo(x4,y4); ctx.stroke();
+    ctx.lineWidth = 1;
+  } else if (mode === "latch"){
+    ctx.fillStyle = "#fff";
+    ctx.beginPath();
+    const slot = [corner(-hL*0.22,-hW*0.45), corner(hL*0.22,-hW*0.45), corner(hL*0.22,hW*0.45), corner(-hL*0.22,hW*0.45)];
+    ctx.moveTo(slot[0][0], slot[0][1]);
+    for (let i = 1; i < slot.length; i++) ctx.lineTo(slot[i][0], slot[i][1]);
+    ctx.closePath(); ctx.fill();
+  }
+}
+function drawTriggerReturnClock(obj, cx, cy, plate){
+  if (!obj.plateDriven || obj.plateId == null || !plate) return;
+  if (plate.mode !== "trigger") return;
+  if (plate.phase !== "holding" && plate.phase !== "returning") return;
+  const speed = SIM.PLATE_DRIVE_SPEED || 0.02;
+  const travel = Math.abs((obj.pressedPosition ?? 1) - (obj.restPosition ?? 0));
+  const travelFrames = travel / Math.max(speed, 1e-6);
+  const hold = plate.holdFrames || 0;
+  const total = Math.max(1, hold + travelFrames);
+  const remaining = plate.phase === "holding"
+    ? (plate.holdTimer || 0) + travelFrames
+    : Math.abs((obj.objectPosition || 0) - (obj.restPosition || 0)) / Math.max(speed, 1e-6);
+  let t = 1 - remaining / total;
+  if (t < 0) t = 0; else if (t > 1) t = 1;
+  const r = SIM.PLATE_TRIGGER_CLOCK_R || 8;
+  const ang = rad(obj.slideAngle || 0);
+  const nx = -Math.sin(ang), ny = Math.cos(ang);
+  const ox = cx + nx * (r + 6), oy = cy + ny * (r + 6);
+  ctx.fillStyle = "#fff";
+  ctx.beginPath(); ctx.arc(ox, oy, r, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(ox, oy, r, 0, Math.PI*2); ctx.stroke();
+  if (t > 0){
+    const start = -Math.PI/2;
+    ctx.fillStyle = INK;
+    ctx.beginPath();
+    ctx.moveTo(ox, oy);
+    ctx.arc(ox, oy, r - 2, start, start + Math.PI*2*t, false);
+    ctx.closePath(); ctx.fill();
+  }
+  const warn = SIM.PLATE_TRIGGER_WARN_FRAMES || 15;
+  // Lua ticks this on SlidingWall:draw. The sim never does, so the blink
+  // uses the editor frame or the warning stays solid for the whole window.
+  if (plate.phase === "returning" && remaining <= warn && (frame % 6) < 3){
+    ctx.fillStyle = INK;
+    ctx.beginPath(); ctx.arc(ox, oy, r - 1, 0, Math.PI*2); ctx.fill();
+  }
+}
 function drawHazardBody(cx,cy,r,fc){
   const bladeCount = 8;
   const baseAngle = (fc*4)%360;
@@ -4311,7 +4524,7 @@ function drawHazardBody(cx,cy,r,fc){
 }
 /** Half-extent of the body along the slide axis (visual rail only; mirrors main.lua). */
 function slideVisualExtent(o){
-  if (o.type === "moving_hazard" || o.type === "sliding_hazard")
+  if (o.type === "moving_hazard" || o.type === "sliding_hazard" || o.type === "ballast")
     return o.radius || CFG.HAZARD_RADIUS_DEFAULT;
   if (o.type === "sliding_wall" || o.type === "moving_wall"){
     const halfW = (o.type === "sliding_wall" ? CFG.BAR_WIDTH : CFG.WALL_WIDTH) / 2;
@@ -4350,49 +4563,53 @@ function drawSlideRailFor(o){
     ctx.lineTo(ax-tx*4+nx*2, ay-ty*4+ny*2);
     ctx.lineTo(ax-tx*4-nx*2, ay-ty*4-ny*2);
     ctx.closePath(); ctx.fill();
-    const midPix = 0;
-    const mcx = sx + Math.cos(r)*midPix, mcy = sy + Math.sin(r)*midPix;
-    drawLinkBadgeAtS(mcx, mcy, o.plateId);
   }
+}
+function gravityBobVec(){
+  // Same as main.lua's gravityBob: roll 0 hangs screen-down, and it turns
+  // with the slider instead of snapping to gravityVec's four quadrants.
+  const r = rad(viewRollDeg || 0);
+  return [-Math.sin(r), Math.cos(r)];
 }
 function drawLinkBadgeAtS(cx, cy, linkId){
   const n = Number(linkId);
   if (!isFinite(n)) return;
+  ctx.fillStyle = "#fff";
+  ctx.beginPath(); ctx.arc(cx, cy, 7, 0, 7); ctx.fill();
   ctx.fillStyle = INK;
-  ctx.beginPath(); ctx.arc(cx,cy,6,0,7); ctx.fill();
-  ctx.strokeStyle = INK; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(cx,cy,7,0,7); ctx.stroke();
-  ctx.fillStyle = INK; ctx.font = "9px monospace"; ctx.textAlign = "center";
-  ctx.fillText(String(Math.round(n)), cx, cy+3);
+  ctx.beginPath(); ctx.arc(cx, cy, 6, 0, 7); ctx.fill();
+  const prevBaseline = ctx.textBaseline;
+  ctx.fillStyle = "#fff"; ctx.font = "7px monospace"; ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(String(Math.round(n)), cx, cy);
   ctx.textAlign = "left";
+  ctx.textBaseline = prevBaseline;
 }
-function drawGroupBadgeAtS(cx, cy, group, inverted){
-  if (group !== "L" && group !== "R"){
-    // Ungrouped warning marker (amber-ish dither ring + !).
-    ctx.strokeStyle = dither(0.35); ctx.lineWidth = 2;
-    ctx.beginPath(); ctx.arc(cx,cy,8,0,7); ctx.stroke();
-    ctx.fillStyle = INK; ctx.font = "10px monospace"; ctx.textAlign = "center";
-    ctx.fillText("?", cx, cy+3);
-    ctx.textAlign = "left";
+function drawGravityBadgeAtS(cx, cy){
+  // Same plumb as drawGravityBadge in entities.lua. Canvas space matches the device;
+  // the CSS tilt rotate swings it with the frame. Editor tilt is never flat.
+  const [gx, gy] = gravityBobVec();
+  ctx.fillStyle = "#fff";
+  ctx.beginPath(); ctx.arc(cx, cy, 6, 0, 7); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, 7, 0, 7); ctx.stroke();
+  ctx.fillStyle = INK;
+  ctx.beginPath(); ctx.arc(cx + gx * 3.5, cy + gy * 3.5, 2, 0, 7); ctx.fill();
+}
+function drawGroupBadgeAtS(cx, cy, group){
+  if (group === "L" || group === "R"){
+    drawGravityBadgeAtS(cx, cy);
     return;
   }
-  const disc = inverted ? "#fff" : INK;
-  const tri = inverted ? INK : "#fff";
-  ctx.fillStyle = disc;
-  ctx.beginPath(); ctx.arc(cx,cy,6,0,7); ctx.fill();
-  ctx.strokeStyle = INK; ctx.lineWidth = 1;
-  ctx.beginPath(); ctx.arc(cx,cy,7,0,7); ctx.stroke();
-  ctx.fillStyle = tri;
-  ctx.beginPath();
-  if (group === "L"){
-    ctx.moveTo(cx-3.5, cy); ctx.lineTo(cx+2.5, cy-3.5); ctx.lineTo(cx+2.5, cy+3.5);
-  } else {
-    ctx.moveTo(cx+3.5, cy); ctx.lineTo(cx-2.5, cy-3.5); ctx.lineTo(cx-2.5, cy+3.5);
-  }
-  ctx.closePath(); ctx.fill();
+  // Ungrouped warning marker (authoring only, not a player mark).
+  ctx.strokeStyle = dither(0.35); ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(cx,cy,8,0,7); ctx.stroke();
+  ctx.fillStyle = INK; ctx.font = "10px monospace"; ctx.textAlign = "center";
+  ctx.fillText("?", cx, cy+3);
+  ctx.textAlign = "left";
 }
 function drawDeflectorAtS(cx,cy,length,angleDeg,selected,group){
-  // BLADE: thin centerline + rounded tips; L/R badge only if crankable (static = rail only).
+  // BLADE: thin centerline + rounded tips; plumb only if tilt-driven (static = rail only).
   const a = rad(angleDeg), c=Math.cos(a), s=Math.sin(a), hL=length/2;
   const x1=cx-c*hL, y1=cy-s*hL, x2=cx+c*hL, y2=cy+s*hL;
   if (selected) dashedCircle(cx,cy,hL+4);
@@ -4403,7 +4620,7 @@ function drawDeflectorAtS(cx,cy,length,angleDeg,selected,group){
   ctx.fillStyle = INK;
   ctx.beginPath(); ctx.arc(x1,y1,tipR,0,7); ctx.fill();
   ctx.beginPath(); ctx.arc(x2,y2,tipR,0,7); ctx.fill();
-  if (group === "L" || group === "R") drawGroupBadgeAtS(cx, cy, group, !!selected);
+  if (group === "L" || group === "R") drawGroupBadgeAtS(cx, cy, group);
 }
 function drawDeflector(o,i,selected){
   const [cx,cy] = toScreen(o.x,o.y);
@@ -4439,6 +4656,7 @@ function drawPressurePlate(o,i){
   drawFoot(-footW, footW);
   drawFoot(-hL+footW, -hL+footW*3);
   drawFoot(hL-footW*3, hL-footW);
+  drawPlateModeMark(corner, cx, cy, ux, uy, px, py, hL, hW, o.mode, false, "idle");
   drawLinkBadgeAtS(cx, cy, o.link);
 }
 function dashedCircle(cx,cy,radius){
@@ -4629,7 +4847,8 @@ function drawObject(o,i){
       drawSlideRailFor(o);
       const [cx,cy]=slideBodyScreen(o,effPos(o,i));
       drawWallBody(cx,cy,o.length,effAngle(o,i), selected?7:undefined, CFG.BAR_WIDTH);
-      if (!o.plateId) drawGroupBadgeAtS(cx, cy, o.group, selected);
+      if (o.plateId != null) drawLinkBadgeAtS(cx, cy, o.plateId);
+      else drawGroupBadgeAtS(cx, cy, o.group);
       break;
     }
     case "moving_wall": {
@@ -4648,7 +4867,20 @@ function drawObject(o,i){
       drawSlideRailFor(o);
       const [cx,cy]=slideBodyScreen(o,effPos(o,i));
       drawHazardBody(cx,cy,o.radius,frame);
-      if (!o.plateId) drawGroupBadgeAtS(cx, cy, o.group, selected);
+      if (o.plateId != null) drawLinkBadgeAtS(cx, cy, o.plateId);
+      else drawGroupBadgeAtS(cx, cy, o.group);
+      break;
+    }
+    case "ballast": {
+      drawSlideRailFor(o);
+      const [cx,cy]=slideBodyScreen(o,effPos(o,i));
+      const r = o.radius || CFG.BALLAST_RADIUS || 8;
+      ctx.fillStyle = INK;
+      ctx.beginPath(); ctx.arc(cx,cy,r,0,7); ctx.fill();
+      ctx.fillStyle = "#fff";
+      ctx.beginPath(); ctx.arc(cx,cy,Math.max(1,r*0.35),0,7); ctx.fill();
+      ctx.strokeStyle = INK; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(cx,cy,r,0,7); ctx.stroke();
       break;
     }
     case "pressure_plate": drawPressurePlate(o,i); break;
@@ -4706,6 +4938,7 @@ function drawTimeHudGuide(){
 function objectReach(o){
   if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard") return (o.radius||14)+5;
   if (o.type==="crawler") return (o.radius||CFG.CRAWLER_RADIUS_DEFAULT||9)+5;
+  if (o.type==="ballast") return (o.radius||CFG.BALLAST_RADIUS||8);
   if (o.type==="deflector") return o.length/2 + 8;
   if (o.type==="wall") return o.length/2 + wallBodyWidth(o)/2;
   if (o.type==="peg") return pegRadiusOf(o);
@@ -4850,6 +5083,7 @@ function drawSelection(){
   let hw=12, hh=12;
   if (BAR_TYPES.has(o.type)){ hw = o.length/2+6; hh = hw; }
   if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard"){ hw=hh=(o.radius||CFG.HAZARD_RADIUS_DEFAULT)+6; }
+  if (o.type==="ballast"){ hw=hh=(o.radius||CFG.BALLAST_RADIUS||8)+6; }
   if (o.type==="crawler"){ hw=hh=(o.radius||CFG.CRAWLER_RADIUS_DEFAULT)+6; }
   ctx.strokeStyle = "rgba(216,129,0,.95)";
   ctx.lineWidth = 1;
@@ -5025,7 +5259,7 @@ function startTest(){
   wheelAccum = 0; testKeys.clear();
   el("btnTest").innerHTML = "&#9632; Stop test";
   el("btnTest").classList.add("active");
-  el("stMode").innerHTML = "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>&#8593;</b> CLING/FIRE &nbsp;<b>&#8595;</b> drop &nbsp;<b>Q/E</b> group L/R &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit";
+  el("stMode").innerHTML = "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>tilt</b> gravity &nbsp;<b>&#8593;</b> CLING/FIRE &nbsp;<b>&#8595;</b> drop &nbsp;<b>Q/E</b> group L/R &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit";
   cv.style.cursor = "default";
   cv.focus && cv.focus();
 }
@@ -5128,6 +5362,7 @@ function drawPressurePlateAtS(plate){
   drawFoot(-footW, footW);
   drawFoot(-hL+footW, -hL+footW*3);
   drawFoot(hL-footW*3, hL-footW);
+  drawPlateModeMark(corner, cx, cy, ux, uy, px, py, hL, hW, plate.mode, plate.latched, plate.phase);
   drawLinkBadgeAtS(cx, cy, plate.link);
 }
 function drawSlideRailSim(obj){
@@ -5147,8 +5382,6 @@ function drawSlideRailSim(obj){
   ctx.lineTo(ax-tx*4+nx*2, ay-ty*4+ny*2);
   ctx.lineTo(ax-tx*4-nx*2, ay-ty*4-ny*2);
   ctx.closePath(); ctx.fill();
-  const midPix = (obj.minSlide + obj.maxSlide) * 0.5;
-  drawLinkBadgeAtS(obj.x + Math.cos(r)*midPix, obj.y + Math.sin(r)*midPix, obj.plateId);
 }
 function drawSim(sim){
   ctx.setTransform(2,0,0,2,0,0);
@@ -5205,7 +5438,10 @@ function drawSim(sim){
         drawSlideRailSim(obj);
         const [cx,cy] = slideCenterOfSim(obj);
         drawWallBody(cx, cy, obj.length, obj.angle, isSelected ? 7 : undefined, CFG.BAR_WIDTH);
-        if (!obj.plateDriven) drawGroupBadgeAtS(cx, cy, obj.group, isSelected);
+        const plate = sim.objects.find(p => p.type === "pressure_plate" && p.link === obj.plateId);
+        drawTriggerReturnClock(obj, cx, cy, plate);
+        if (obj.plateDriven && obj.plateId != null) drawLinkBadgeAtS(cx, cy, obj.plateId);
+        else if (!obj.plateDriven) drawGroupBadgeAtS(cx, cy, obj.group);
         break;
       }
       case "moving_wall": {
@@ -5224,7 +5460,22 @@ function drawSim(sim){
         drawSlideRailSim(obj);
         const [cx,cy] = slideCenterOfSim(obj);
         drawHazardBody(cx, cy, obj.radius, frame);
-        if (!obj.plateDriven) drawGroupBadgeAtS(cx, cy, obj.group, isSelected);
+        const plate = sim.objects.find(p => p.type === "pressure_plate" && p.link === obj.plateId);
+        drawTriggerReturnClock(obj, cx, cy, plate);
+        if (obj.plateDriven && obj.plateId != null) drawLinkBadgeAtS(cx, cy, obj.plateId);
+        else if (!obj.plateDriven) drawGroupBadgeAtS(cx, cy, obj.group);
+        break;
+      }
+      case "ballast": {
+        drawSlideRailAtS(obj.x, obj.y, obj.slideAngle, obj.minSlide, obj.maxSlide, obj.radius || 8);
+        const [cx,cy] = slideCenterOfSim(obj);
+        const r = obj.radius || CFG.BALLAST_RADIUS || 8;
+        ctx.fillStyle = INK;
+        ctx.beginPath(); ctx.arc(cx,cy,r,0,7); ctx.fill();
+        ctx.fillStyle = "#fff";
+        ctx.beginPath(); ctx.arc(cx,cy,Math.max(1,r*0.35),0,7); ctx.fill();
+        ctx.strokeStyle = INK;
+        ctx.beginPath(); ctx.arc(cx,cy,r,0,7); ctx.stroke();
         break;
       }
       case "pressure_plate": drawPressurePlateAtS(obj); break;
@@ -5345,8 +5596,8 @@ function hitTest(sx,sy){
     if (o.type==="spawn") hit = Math.hypot(sx-cx,sy-cy) <= 10;
     else if (o.type==="exit") hit = Math.abs(sx-cx)<=11 && Math.abs(sy-cy)<=13;
     else if (o.type==="key" || o.type==="coin") hit = Math.hypot(sx-cx,sy-cy) <= 8;
-    else if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard"||o.type==="crawler")
-      hit = Math.hypot(sx-cx,sy-cy) <= Math.max(8, o.radius||(o.type==="crawler"?CFG.CRAWLER_RADIUS_DEFAULT:CFG.HAZARD_RADIUS_DEFAULT));
+    else if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard"||o.type==="crawler"||o.type==="ballast")
+      hit = Math.hypot(sx-cx,sy-cy) <= Math.max(8, o.radius||(o.type==="crawler"?CFG.CRAWLER_RADIUS_DEFAULT:(o.type==="ballast"?(CFG.BALLAST_RADIUS||8):CFG.HAZARD_RADIUS_DEFAULT)));
     else if (o.type==="peg")
       hit = Math.hypot(sx-cx,sy-cy) <= pegRadiusOf(o) + 2;
     else if (o.type==="launcher") hit = Math.hypot(sx-cx,sy-cy) <= 16;
@@ -5460,7 +5711,10 @@ function validate(){
   });
 
   const borders = resolveArenaBorders(level);
-  if (!bordersConnected(borders)){
+  const openCount = ARENA_EDGE_NAMES.filter(e => borders[e] === "open").length;
+  // All four open is a legal arena: no perimeter, and falling off is death.
+  // A partial open still has to be one contiguous gap.
+  if (openCount !== 4 && !bordersConnected(borders)){
     errs.push("Open borders disconnect the arena (e.g. opposite sides open). Keep opens as one contiguous gap.");
   }
   if (borders.bottom === "open"){
@@ -5506,12 +5760,11 @@ function validate(){
   });
   for (const link of Object.keys(plateLinks)){
     const n = Number(link);
-    if ((plateTargets[n]||0) !== 1)
-      warns.push(`pressure_plate link ${n} must match exactly one driven object with plateId=${n}.`);
+    if ((plateTargets[n]||0) < 1)
+      warns.push(`pressure_plate link ${n} must drive at least one sliding_wall / sliding_hazard.`);
   }
-  for (const [pid,count] of Object.entries(plateTargets)){
+  for (const [pid] of Object.entries(plateTargets)){
     if (!plateLinks[pid]) warns.push(`plateId ${pid} has no matching pressure_plate link.`);
-    if (count > 1) warns.push(`Duplicate plateId ${pid} on driven objects.`);
   }
 
   const signs = objs.filter(o => o.type === "sign");
@@ -5640,8 +5893,13 @@ function renderProps(){
   box.appendChild(propNum("y (center, +up)", "y", o, {step:5}));
 
   const t = o.type;
-  if (t==="hazard" || t==="moving_hazard" || t==="sliding_hazard" || t==="crawler")
+  if (t==="hazard" || t==="moving_hazard" || t==="sliding_hazard" || t==="crawler" || t==="ballast")
     box.appendChild(propNum("radius", "radius", o, {min:2}));
+  if (t === "ballast"){
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = "tilt weight on a wire. parks at the downhill stop. presses plates. not an L/R crankable";
+    box.appendChild(hint);
+  }
   if (t==="crawler"){
     const row = document.createElement("div"); row.className="prop-row";
     const lab = document.createElement("label"); lab.textContent="direction";
@@ -5755,7 +6013,34 @@ function renderProps(){
   if (t === "pressure_plate"){
     box.appendChild(propNum("length", "length", o, {min:10, step:1}));
     box.appendChild(propNum("link", "link", o, {min:1, step:1}));
-    box.appendChild(propSeg("mode", "mode", o, ["hold","latch"], (M)=>{ o.mode = M; }));
+    box.appendChild(propSeg("mode", "mode", o, ["hold","latch","trigger"], (M)=>{ o.mode = M; }));
+    const modeHint = document.createElement("div"); modeHint.className = "hint";
+    modeHint.textContent = o.mode === "latch"
+      ? "first press sticks until restart. the pad draws spent once it has fired"
+      : o.mode === "trigger"
+      ? "one shot: the target opens, holds, then returns. a re-touch during that stroke does nothing"
+      : "stays driven only while something is on the pad";
+    box.appendChild(modeHint);
+    if (o.mode === "trigger"){
+      const defHold = CFG.PLATE_TRIGGER_HOLD_FRAMES || 60;
+      const row = document.createElement("div"); row.className = "prop-row";
+      const lab = document.createElement("label"); lab.textContent = "holdFrames";
+      const inp = document.createElement("input"); inp.type = "number"; inp.min = 0; inp.step = 1;
+      inp.value = fmtNum(o.holdFrames ?? defHold);
+      inp.addEventListener("change", ()=>{
+        stopPlay(); pushUndo();
+        let v = parseFloat(inp.value);
+        if (!isFinite(v) || v === defHold) delete o.holdFrames;
+        else o.holdFrames = Math.max(0, v);
+        inp.value = fmtNum(o.holdFrames ?? defHold);
+        commit();
+      });
+      row.append(lab, inp);
+      box.appendChild(row);
+      const hint = document.createElement("div"); hint.className = "hint";
+      hint.textContent = "frames the door stays open before it returns (default " + defHold + ")";
+      box.appendChild(hint);
+    }
   }
   if (t === "sliding_wall" || t === "sliding_hazard"){
     box.appendChild(propNum("plateId", "plateId", o, {min:1, step:1}));
