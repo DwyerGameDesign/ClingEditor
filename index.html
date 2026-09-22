@@ -81,6 +81,7 @@
   #canvasHolder{
     width:800px; height:480px;
     display:flex; align-items:center; justify-content:center;
+    flex:0 0 auto; min-width:0; min-height:0;
   }
   #canvasWrap{
     position:relative; border:3px solid var(--ink); background:var(--paper);
@@ -306,7 +307,10 @@ const CFG = {
   PLATE_RELEASE_GRACE_FRAMES: 2,
 
   // Accelerometer / gravity remap (editor tilt slider).
-  ACCEL_SLIDER_GRAVITY_GAIN: 0.6,
+  ACCEL_SLIDER_GRAVITY: 0.45,
+  ACCEL_SLIDER_FRICTION: 0.08,
+  ACCEL_SLIDER_DEADZONE: 0.12,
+  ACCEL_SLIDER_MAX_SPEED: 8,
   ACCEL_TILT_SIGN: -1,
   ACCEL_DPAD_QUADRANT_HYSTERESIS: 12,
   ACCEL_DPAD_REMAP_ENABLED: true,
@@ -1183,7 +1187,7 @@ function importLevelFromLua(text){
 }
 
 /* ---------- built-in level library (verbatim from levels.lua) ---------- */
-const BUILTIN_LEVELS = [{"n":1,"name":"First Roll","lua":"{ name = \"First Roll\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    tutorial = \"Crank = roll.\",\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"key\", x = 0, y = -100 },\n    { type = \"key\", x = 180, y = 0 },\n    { type = \"key\", x = 0, y = 100 },\n    { type = \"exit\", x = -175, y = 60 },\n  }}"},{"n":2,"name":"Step Down","lua":"{ name = \"Step Down\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Down = DROP\",\n    objects = {\n    { type = \"spawn\", x = -150, y = 70 },\n    { type = \"deflector\", x = -100, y = 70, length = 100, angle = 0 },\n    { type = \"deflector\", x = 0, y = 0, length = 140, angle = 0 },\n    { type = \"deflector\", x = 100, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -60, y = 80 },\n    { type = \"key\", x = 0, y = 10 },\n    { type = \"key\", x = 65, y = -60 },\n    { type = \"exit\", x = 140, y = -60 },\n  }}"},{"n":3,"name":"Step Up","lua":"{ name = \"Step Up\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Up = JUMP\",\n    objects = {\n    { type = \"spawn\", x = -140, y = -50 },\n    { type = \"wall\", x = 0, y = 0, length = 140, angle = 0, width = 15 },\n    { type = \"wall\", x = -100, y = -65, length = 100, angle = 0, width = 15 },\n    { type = \"wall\", x = 100, y = 65, length = 100, angle = 0, width = 15 },\n    { type = \"key\", x = -60, y = -50 },\n    { type = \"key\", x = 0, y = 15 },\n    { type = \"key\", x = 60, y = 80 },\n    { type = \"exit\", x = 140, y = 80 },\n  }}"},{"n":4,"name":"Teeter Totter","lua":"{ name = \"Teeter Totter\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"LEFT = Control Objects\",\n    objects = {\n    { type = \"spawn\", x = -150, y = 0 },\n    { type = \"key\", x = 0, y = 5 },\n    { type = \"exit\", x = 150, y = 5 },\n    { type = \"deflector\", x = 0, y = -5, length = 320, angle = 0 },\n    { type = \"sliding_hazard\", x = -75, y = 30, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0, group = \"L\" },\n    { type = \"sliding_hazard\", x = 75, y = -30, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0, group = \"L\" },\n  }}"},{"n":5,"name":"NewDesign 1","lua":"{ name = \"NewDesign 1\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = 25 },\n    { type = \"key\", x = -160, y = -10 },\n    { type = \"key\", x = 160, y = -10 },\n    { type = \"key\", x = 0, y = 30 },\n    { type = \"exit\", x = 150, y = 85 },\n    { type = \"deflector\", x = 0, y = -30, length = 120, angle = 0, group = \"L\" },\n    { type = \"deflector\", x = -160, y = 25, length = 70, angle = 0 },\n    { type = \"deflector\", x = 150, y = -40, length = 70, angle = 330 },\n    { type = \"deflector\", x = -150, y = -40, length = 70, angle = 30 },\n    { type = \"wall\", x = 150, y = 65, length = 70, angle = 0 },\n  }}"},{"n":6,"name":"Gravity Gym","lua":"{ name = \"Gravity Gym\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"TILT to slide, FLIP gravity\",\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -150, y = -70, length = 60, angle = 0 },\n    { type = \"sliding_wall\", x = -115, y = -78, length = 60, angle = 0, slideAngle = 0, slideRange = 25, objectPosition = 0.0, group = \"L\" },\n    { type = \"deflector\", x = -10, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -30, y = -50 },\n    { type = \"deflector\", x = 70, y = -70, length = 80, angle = 0 },\n    { type = \"sliding_hazard\", x = 60, y = -25, radius = 20, slideAngle = 90, slideRange = 40, objectPosition = 0.5, group = \"R\" },\n    { type = \"key\", x = 100, y = -52 },\n    { type = \"deflector\", x = 162, y = -100, length = 36, angle = 0 },\n    { type = \"key\", x = 162, y = -90 },\n    { type = \"exit\", x = 170, y = -100 },\n  }}"}];
+const BUILTIN_LEVELS = [{"n":1,"name":"First Roll","lua":"{ name = \"First Roll\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    tutorial = \"Crank = roll.\",\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"key\", x = 0, y = -100 },\n    { type = \"key\", x = 180, y = 0 },\n    { type = \"key\", x = 0, y = 100 },\n    { type = \"exit\", x = -175, y = 60 },\n  }}"},{"n":2,"name":"Step Down","lua":"{ name = \"Step Down\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Down = DROP\",\n    objects = {\n    { type = \"spawn\", x = -150, y = 70 },\n    { type = \"deflector\", x = -100, y = 70, length = 100, angle = 0 },\n    { type = \"deflector\", x = 0, y = 0, length = 140, angle = 0 },\n    { type = \"deflector\", x = 100, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -60, y = 80 },\n    { type = \"key\", x = 0, y = 10 },\n    { type = \"key\", x = 65, y = -60 },\n    { type = \"exit\", x = 140, y = -60 },\n  }}"},{"n":3,"name":"Step Up","lua":"{ name = \"Step Up\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Up = JUMP\",\n    objects = {\n    { type = \"spawn\", x = -140, y = -50 },\n    { type = \"wall\", x = 0, y = 0, length = 140, angle = 0, width = 15 },\n    { type = \"wall\", x = -100, y = -65, length = 100, angle = 0, width = 15 },\n    { type = \"wall\", x = 100, y = 65, length = 100, angle = 0, width = 15 },\n    { type = \"key\", x = -60, y = -50 },\n    { type = \"key\", x = 0, y = 15 },\n    { type = \"key\", x = 60, y = 80 },\n    { type = \"exit\", x = 140, y = 80 },\n  }}"},{"n":4,"name":"Teeter Totter","lua":"{ name = \"Teeter Totter\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"LEFT = Control Objects\",\n    objects = {\n    { type = \"spawn\", x = -150, y = 0 },\n    { type = \"key\", x = 0, y = 5 },\n    { type = \"exit\", x = 150, y = 5 },\n    { type = \"deflector\", x = 0, y = -5, length = 320, angle = 0 },\n    { type = \"sliding_hazard\", x = -75, y = 30, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0, group = \"L\" },\n    { type = \"sliding_hazard\", x = 75, y = -30, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0, group = \"L\" },\n  }}"},{"n":5,"name":"NewDesign 1","lua":"{ name = \"NewDesign 1\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = 25 },\n    { type = \"key\", x = -160, y = -10 },\n    { type = \"key\", x = 160, y = -10 },\n    { type = \"key\", x = 0, y = 30 },\n    { type = \"exit\", x = 150, y = 85 },\n    { type = \"deflector\", x = 0, y = -30, length = 120, angle = 0, group = \"L\" },\n    { type = \"deflector\", x = -160, y = 25, length = 70, angle = 0 },\n    { type = \"deflector\", x = 150, y = -40, length = 70, angle = 330 },\n    { type = \"deflector\", x = -150, y = -40, length = 70, angle = 30 },\n    { type = \"wall\", x = 150, y = 65, length = 70, angle = 0 },\n  }}"},{"n":6,"name":"Gravity Gym","lua":"{ name = \"Gravity Gym\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"TILT to slide, FLIP gravity\",\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -150, y = -70, length = 60, angle = 0 },\n    { type = \"sliding_wall\", x = -115, y = -78, length = 60, angle = 0, slideAngle = 0, slideRange = 25, objectPosition = 0.0, group = \"L\" },\n    { type = \"deflector\", x = -10, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -30, y = -50 },\n    { type = \"deflector\", x = 70, y = -70, length = 80, angle = 0 },\n    { type = \"sliding_hazard\", x = 60, y = -25, radius = 20, slideAngle = 90, slideRange = 40, objectPosition = 1.0, group = \"R\" },\n    { type = \"key\", x = 100, y = -52 },\n    { type = \"deflector\", x = 162, y = -100, length = 36, angle = 0 },\n    { type = \"key\", x = 162, y = -90 },\n    { type = \"exit\", x = 170, y = -100 },\n  }}"}];
 /* =====================================================================
    GAMEPLAY SIMULATION — faithful port of rails.lua + cling_ball.lua +
    the game glue in main.lua. Screen space (Y-down). Rails arrays are
@@ -1233,6 +1237,7 @@ const SIM = {
   JUMP_TANGENT_INHERIT: 0.6,  // fraction of along-rail crank speed carried out
   JUMP_TANGENT_MAX: 5,  // px/frame clamp on inherited tangential speed
   JUMP_TANGENT_UP_MAX: 2.57,  // px/frame; sqrt(2g*64)-sqrt(2g*32) at g=0.6
+  JUMP_TANGENT_STICKY_FRAMES: 2,
   JUMP_CARRIER_INHERIT: 1,  // fraction of the host rail's own motion carried out
   JUMP_CARRIER_MAX: 9,  // px/frame clamp on carrier-imparted speed
   JUMP_SOURCE_IGNORE_FRAMES: 6,  // frames the launch rail is unlandable
@@ -1254,12 +1259,19 @@ const SIM = {
   PLATE_PRESS_DIST: 6,
   PLATE_DRIVE_SPEED: 0.02,
   PLATE_RELEASE_GRACE_FRAMES: 2,
+
+  // Gravity-driven sliders (px/frame along the rail).
+  ACCEL_SLIDER_GRAVITY: 0.45,
+  ACCEL_SLIDER_FRICTION: 0.08,
+  ACCEL_SLIDER_DEADZONE: 0.12,
+  ACCEL_SLIDER_MAX_SPEED: 8,
 };
 const mod = (a,n)=>{ const r = a % n; return r < 0 ? r + n : r; };
 
 /* ---------------- gravity / tilt (ports of main.lua + entities.lua) ---------------- */
 let viewRollDeg = 0;
 let viewDpadSteps = 0;
+let viewScale = 1;   // CSS scale that keeps the rotated frame inside #stage
 
 function wrapSignedDeg(d){
   d = Number(d) || 0;
@@ -1310,15 +1322,48 @@ function gravityFloorEdge(){
 function toGravitySpace(x, y, gx, gy){
   return [x * gy + y * (-gx), x * gx + y * gy];
 }
-function sliderGravityTarget(slideAngle, rollDeg, authored){
-  const gain = CFG.ACCEL_SLIDER_GRAVITY_GAIN ?? 0.6;
-  const curComp = Math.cos(rad(90 + (rollDeg || 0) - (slideAngle || 0)));
-  if (authored == null) authored = 0.5;
-  const levelness = 1 - Math.min(1, Math.abs(curComp));
-  let target = (0.5 + curComp * gain) + (authored - 0.5) * levelness;
-  if (target < 0) return 0;
-  if (target > 1) return 1;
-  return target;
+function sliderRailGravity(slideAngle, rollDeg){
+  if (rollDeg == null) return 0;
+  return Math.cos(rad(90 + rollDeg - (slideAngle || 0)));
+}
+const SLIDE_VEL_STOP = 0.05;
+function stepSliderGravity(obj, rollDeg){
+  if (!obj || obj.plateDriven) return null;
+  const span = (obj.maxSlide || 0) - (obj.minSlide || 0);
+  if (span <= 0){ obj._slideVel = 0; return null; }
+  const g = SIM.ACCEL_SLIDER_GRAVITY ?? CFG.ACCEL_SLIDER_GRAVITY ?? 0.45;
+  const friction = SIM.ACCEL_SLIDER_FRICTION ?? CFG.ACCEL_SLIDER_FRICTION ?? 0.08;
+  const deadzone = SIM.ACCEL_SLIDER_DEADZONE ?? CFG.ACCEL_SLIDER_DEADZONE ?? 0.12;
+  const maxSpeed = SIM.ACCEL_SLIDER_MAX_SPEED ?? CFG.ACCEL_SLIDER_MAX_SPEED ?? 8;
+  let curComp = sliderRailGravity(obj.slideAngle, rollDeg);
+  if (Math.abs(curComp) < deadzone) curComp = 0;
+  const pos = obj.objectPosition || 0.5;
+  const gAccel = curComp * g;
+  if ((pos <= 0 && gAccel <= 0) || (pos >= 1 && gAccel >= 0)){
+    obj._slideVel = 0;
+    return null;
+  }
+  let accel = gAccel;
+  let vel = obj._slideVel || 0;
+  if (Math.abs(vel) < SLIDE_VEL_STOP){
+    if (Math.abs(accel) <= friction){ obj._slideVel = 0; return null; }
+    accel += (accel > 0) ? -friction : friction;
+    vel = 0;
+  } else {
+    accel += (vel > 0) ? -friction : friction;
+  }
+  vel += accel;
+  if (vel > maxSpeed) vel = maxSpeed;
+  else if (vel < -maxSpeed) vel = -maxSpeed;
+  const mn = obj.minSlide || 0, mx = obj.maxSlide || 0;
+  let pix = mn + pos * span + vel;
+  if (pix <= mn){ pix = mn; vel = 0; }
+  else if (pix >= mx){ pix = mx; vel = 0; }
+  obj._slideVel = vel;
+  let newPos = (pix - mn) / span;
+  if (newPos < 0) newPos = 0; else if (newPos > 1) newPos = 1;
+  if (Math.abs(newPos - pos) < 1e-6) return null;
+  return newPos;
 }
 function followsTilt(o){
   if (!o) return false;
@@ -1738,6 +1783,7 @@ function makeSimObjects(level){
           if (!o.plateDriven){
             o.group = (a.group === "L" || a.group === "R") ? a.group : ((a.x < 0) ? "L" : "R");
           }
+          o._slideVel = 0;
         } else {
           o.speed = resolveSpeed(a.type, a.speed);
           o._moveDir = (o.objectPosition >= 1-0.001) ? -1 : 1;
@@ -2033,7 +2079,7 @@ function createClingSim(level){
     ball.travelDir = ball.lastDir;
     ball.crankDeltaS = delta;
     ball.crankDeltaSSticky = delta;
-    ball.crankDeltaSStickyFrames = 3;
+    ball.crankDeltaSStickyFrames = SIM.JUMP_TANGENT_STICKY_FRAMES || 2;
     clampOrWrap();
   }
   function airCrank(change){
@@ -2041,7 +2087,9 @@ function createClingSim(level){
     if (!SIM.JUMP_AIR_CONTROL) return;
     if (Math.abs(change) <= 0.1) return;
     const [gx, gy] = gravityVec();
-    const rx = gy, ry = -gx; // right ⊥ gravity
+    // Perp to gravity; keep +crank on +X so a 180° flip doesn't reverse air steer.
+    let rx = gy, ry = -gx;
+    if (rx < 0){ rx = -rx; ry = -ry; }
     const chir = SIM.CRANK_CHIRALITY || 1;
     const dv = change * SIM.JUMP_AIR_SENS * chir;
     ball.flightVx = (ball.flightVx || 0) + rx * dv;
@@ -2173,12 +2221,17 @@ function createClingSim(level){
     }
     return bestSign;
   }
-  /** Mid-face bar landings settle at contact; shove only near outline corners. */
+  function barSegLandable(rail, si){
+    if (!si) return false;
+    const [gx, gy] = gravityVec();
+    return RL.barOutlineSegmentLandable(rail, si, SIM.DROP_FACE_NY ?? -0.3, gx, gy);
+  }
+  /** Landable faces settle at contact, including near a corner (no inward shove). */
   function barOutlineLandPushSign(nRail, landS, fromX, fromY, approachX, approachY, preferSide){
     const si = RL.segmentIndexAt(nRail, landS);
-    if (si === 2 || si === 4) return [1, 0];
+    if (barSegLandable(nRail, si)) return [1, 0];
     const clear = tipClearance(nRail);
-    if (RL.distToCorner(nRail, landS) <= clear){
+    if ((si === 2 || si === 4) && RL.distToCorner(nRail, landS) <= clear){
       const sign = pickOutlinePushSign(
         nRail, landS, null, fromX, fromY, approachX, approachY, preferSide);
       return [sign, clear];
@@ -2893,8 +2946,13 @@ function createClingSim(level){
     let sign = (dot >= 0) ? 1 : -1;
     let push = 0;
     if (nRail.kind === "bar_outline"){
-      let preferSide = -(ux*nRail.px + uy*nRail.py);
-      if (Math.abs(preferSide) < 0.05) preferSide = null;
+      let preferSide;
+      if (ball.fromJump){
+        preferSide = barTopPreferSide(nRail);
+      } else {
+        preferSide = -(ux*nRail.px + uy*nRail.py);
+        if (Math.abs(preferSide) < 0.05) preferSide = null;
+      }
       [sign, push] = barOutlineLandPushSign(
         nRail, landS, ball.flightX, ball.flightY, ux, uy, preferSide);
     } else if (railIndex === 1){
@@ -3038,6 +3096,25 @@ function createClingSim(level){
     const seg = segs[si - 1];
     if (!seg) return false;
     return segmentIsLandable(railIndex, rail, si, seg);
+  }
+  // Down-facing solid face: landable test with gravity flipped (n·g > -FACE_NY).
+  function clingFaceIsCeiling(railIndex, s){
+    const rail = game.rails[railIndex];
+    if (!isExteriorSolidRail(rail)) return false;
+    const si = RL.segmentIndexAt(rail, s);
+    if (si == null) return false;
+    const faceNy = faceNyThreshold();
+    const [gx, gy] = gravityVec();
+    if (rail.kind === "bar_outline"){
+      return RL.barOutlineSegmentLandable(rail, si, faceNy, -gx, -gy);
+    }
+    if (rail.kind === "peg"){
+      const segs = RL.segments(rail);
+      const seg = segs[si - 1];
+      if (!seg) return false;
+      return RL.pegSegmentLandable(rail, seg, faceNy, -gx, -gy);
+    }
+    return false;
   }
   function updateJumpCoyote(){
     if (ball.mode !== "cling") return;
@@ -3258,6 +3335,11 @@ function createClingSim(level){
     if (ball.mode !== "cling") return false;
     const rail = game.rails[ball.rail];
     if (!rail) return false;
+    // Solid ceiling: jump would phase through the body. Live s, not coyote.
+    if (clingFaceIsCeiling(ball.rail, ball.s)){
+      beginDropDenySquash();
+      return false;
+    }
     const [px, py] = worldPos();
     const [gx, gy] = gravityVec();
     const upX = -gx, upY = -gy;
@@ -3283,9 +3365,6 @@ function createClingSim(level){
     } else {
       [nx, ny] = landingSquashNormal(rail, geomS, contactX + upX * 4, contactY + upY * 4);
     }
-    // Underside / ceiling cling: normal faces into gravity → refuse.
-    if (nx * gx + ny * gy > 0.5) return false;
-
     const bias = SIM.JUMP_NORMAL_BIAS;
     let bx = upX + (nx - upX) * bias;
     let by = upY + (ny - upY) * bias;
@@ -3303,16 +3382,14 @@ function createClingSim(level){
     ts *= SIM.JUMP_TANGENT_INHERIT;
     if (ts > SIM.JUMP_TANGENT_MAX) ts = SIM.JUMP_TANGENT_MAX;
     else if (ts < -SIM.JUMP_TANGENT_MAX) ts = -SIM.JUMP_TANGENT_MAX;
-    // Full lateral aim; along-up (ramp / vertical ride) capped so sticky crank
-    // cannot explode jump height (mirrors CLING_JUMP_TANGENT_UP_MAX).
+    // Along-up only (ramp / vertical ride). Lateral discarded so a floor jump
+    // cannot inherit leftover crank into a left/right launch.
     let t2x = tx * ts, t2y = ty * ts;
-    const rawAlong = t2x * upX + t2y * upY;
-    let along = rawAlong;
+    let along = t2x * upX + t2y * upY;
     const upMax = SIM.JUMP_TANGENT_UP_MAX != null ? SIM.JUMP_TANGENT_UP_MAX : 2.57;
     if (along > upMax) along = upMax;
     else if (along < -upMax) along = -upMax;
-    t2x += upX * (along - rawAlong);
-    t2y += upY * (along - rawAlong);
+    t2x = upX * along; t2y = upY * along;
     vx += t2x; vy += t2y;
 
     const owner = ownerOf(ball.rail);
@@ -3386,6 +3463,17 @@ function createClingSim(level){
     }
     return false;
   }
+  function jumpPreferUpFaceLanding(railIndex){
+    const r = game.rails[railIndex];
+    if (!r || r.kind !== "bar_outline") return false;
+    const br = SIM.BALL_RADIUS;
+    const slack = SIM.DROP_BAND_SLACK;
+    const [gx, gy] = gravityVec();
+    const [, nowAlong] = toGravitySpace(ball.flightX, ball.flightY, gx, gy);
+    const hit = findBarUpFaceLanding(railIndex, nowAlong - br - slack);
+    if (hit){ landFromFall(hit.i, hit.s); return true; }
+    return false;
+  }
   function tryJumpSideCatch(){
     if (!ball.fromJump) return false;
     const snap = SIM.LAUNCH_CATCH_SNAP;
@@ -3407,6 +3495,7 @@ function createClingSim(level){
     }
     if (!bestI) return false;
     if (bestSpiked){ die(); return true; }
+    if (jumpPreferUpFaceLanding(bestI)) return true;
     landFromFlight(bestI, bestS);
     return true;
   }
@@ -3415,6 +3504,7 @@ function createClingSim(level){
     if (!r) return false;
     const cp = RL.closestPoint(r, ball.flightX, ball.flightY);
     if (railIndex === 1 && sOnSpikedArenaEdge(cp.s)){ die(); return true; }
+    if (jumpPreferUpFaceLanding(railIndex)) return true;
     landFromFlight(railIndex, cp.s);
     return true;
   }
@@ -3451,6 +3541,12 @@ function createClingSim(level){
     const hit = findBarUpFaceLanding(railIndex, -Infinity);
     if (hit){ landFromFall(hit.i, hit.s); return true; }
     return false;
+  }
+  function resolveJumpSolidContainment(railIndex){
+    const rail = game.rails[railIndex];
+    if (rail && rail.kind === "peg") return clingToRailClosest(railIndex);
+    if (jumpPreferUpFaceLanding(railIndex)) return true;
+    return tryJumpSideCatch() || clingToRailClosest(railIndex);
   }
   function stepFall(){
     if (ball.mode !== "falling") return;
@@ -3494,7 +3590,7 @@ function createClingSim(level){
       if (isExteriorSolidRail(rail) && !isIgnored(i)
           && RL.pointInSolid(rail, ball.flightX, ball.flightY, r)){
         if (ball.fromJump){
-          if (tryJumpSideCatch() || clingToRailClosest(i)) return;
+          if (resolveJumpSolidContainment(i)) return;
         } else if (rail.kind === "peg"){
           if (clingToRailClosest(i)) return;
         } else if (containmentBarLanding(i)) return;
@@ -3518,7 +3614,7 @@ function createClingSim(level){
         const rail = game.rails[i];
         if (isExteriorSolidRail(rail) && !isIgnored(i)
             && RL.pointInSolid(rail, ball.flightX, ball.flightY, r)){
-          if (ball.fromJump && (tryJumpSideCatch() || clingToRailClosest(i))) return true;
+          if (ball.fromJump && resolveJumpSolidContainment(i)) return true;
           if (!ball.fromJump && rail.kind === "peg" && clingToRailClosest(i)) return true;
           if (!ball.fromJump && rail.kind !== "peg" && containmentBarLanding(i)) return true;
         }
@@ -3856,8 +3952,8 @@ function createClingSim(level){
           const base = (obj._cfg && obj._cfg.angle) || 0;
           applyDeflectorTargetAngle(obj, mod(base + rollDeg, 360));
         } else if (obj.type === "sliding_wall" || obj.type === "sliding_hazard"){
-          const authored = (obj._cfg && obj._cfg.objectPosition != null) ? obj._cfg.objectPosition : 0.5;
-          applySliderTargetPosition(obj, sliderGravityTarget(obj.slideAngle, rollDeg, authored));
+          const target = stepSliderGravity(obj, rollDeg);
+          if (target != null) applySliderTargetPosition(obj, target);
         }
       }
     }
@@ -3876,6 +3972,7 @@ function createClingSim(level){
     } else if (obj.type === "sliding_wall"){
       const span = obj.maxSlide - obj.minSlide;
       if (span <= 0) return;
+      obj._slideVel = 0;
       const [prevCx, prevCy] = simSlideCenter(obj);
       obj.objectPosition += change * SIM.SLIDER_CRANK_SENS / span;
       if (obj.objectPosition < 0) obj.objectPosition = 0;
@@ -3886,6 +3983,7 @@ function createClingSim(level){
     } else if (obj.type === "sliding_hazard"){
       const span = obj.maxSlide - obj.minSlide;
       if (span <= 0) return;
+      obj._slideVel = 0;
       obj.objectPosition += change * SIM.SLIDER_CRANK_SENS / span;
       if (obj.objectPosition < 0) obj.objectPosition = 0;
       else if (obj.objectPosition > 1) obj.objectPosition = 1;
@@ -3958,7 +4056,10 @@ function createClingSim(level){
       if (obj._cfg){
         if (obj.type === "deflector" && obj._cfg.angle != null) obj.angle = obj._cfg.angle;
         if ((obj.type === "sliding_wall" || obj.type === "sliding_hazard")
-            && obj._cfg.objectPosition != null) obj.objectPosition = obj._cfg.objectPosition;
+            && obj._cfg.objectPosition != null){
+          obj.objectPosition = obj._cfg.objectPosition;
+          obj._slideVel = 0;
+        }
       }
     }
     game.keysCollected = 0;
@@ -4069,7 +4170,7 @@ if (typeof module !== "undefined" && module.exports){
     exportLevel, importLevelFromLua, parseLuaText, slideBodyScreen, barEndpointsScreen,
     encodeShareCode, decodeShareCode, LEVEL_CODEC,
     toScreen, toCenter, newObject, CFG, SIM, RL, createClingSim,
-    gravityVec, gravityDpad, sliderGravityTarget, setViewRollDeg, followsTilt,
+    gravityVec, gravityDpad, sliderRailGravity, stepSliderGravity, setViewRollDeg, followsTilt,
     makeBarOutlineRailS, makeOpenRailS, arenaRailS,
     resolveArenaBorders, spikesFromBorders, defaultBorders, migrateLegacyBorders,
     BUILTIN_LEVELS,
@@ -4123,10 +4224,6 @@ function dither(alpha){
 const INK = "#111";
 
 /* ---------- effective (play-aware) values ---------- */
-function tiltPreviewPos(o){
-  if (!followsTilt(o) || (o.type !== "sliding_wall" && o.type !== "sliding_hazard")) return null;
-  return sliderGravityTarget(o.slideAngle, viewRollDeg, o.objectPosition);
-}
 function tiltPreviewAngle(o){
   if (!followsTilt(o) || o.type !== "deflector") return null;
   return mod((o.angle || 0) + viewRollDeg, 360);
@@ -4141,8 +4238,6 @@ function effAngle(o,i){
 }
 function effPos(o,i){
   if (playing && runtime && runtime[i] && runtime[i].pos !== undefined) return runtime[i].pos;
-  const tilted = tiltPreviewPos(o);
-  if (tilted != null) return tilted;
   return o.objectPosition;
 }
 function bodyCenterScreen(o,i){
@@ -5863,8 +5958,10 @@ function canvasScreenPos(e){
   const dy = e.clientY - cy;
   const a = rad(viewRollDeg);
   const c = Math.cos(a), s = Math.sin(a);
-  const rx = dx * c - dy * s;
-  const ry = dx * s + dy * c;
+  // Inverse of rotate(-viewRollDeg) scale(viewScale): un-rotate, then unscale.
+  // At scale 1 this is the same 800×480 mapping as before.
+  const rx = (dx * c - dy * s) / viewScale;
+  const ry = (dx * s + dy * c) / viewScale;
   return [(rx + 400) / 2, (ry + 240) / 2];
 }
 const snapV = (v, fine)=> Math.round(v / (fine?1:5)) * (fine?1:5);
@@ -6093,16 +6190,61 @@ bindBorderEdge("bdLeft","left");
 bindBorderEdge("bdRight","right");
 
 /* ---------- tilt slider (editor-only; not exported) ---------- */
+// Free space in #stage under the toolbar and above the status line.
+// offsetWidth/Height ignore a scrollbar that is currently showing, so fitting
+// this box does not toggle the scrollbar and retrigger layout.
+function stageAvailSize(){
+  const stage = el("stage");
+  const toolbar = el("toolbar");
+  const status = el("status");
+  const cs = getComputedStyle(stage);
+  const padX = parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight);
+  const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+  const toolbarMB = parseFloat(getComputedStyle(toolbar).marginBottom) || 0;
+  const statusMT = parseFloat(getComputedStyle(status).marginTop) || 0;
+  return [
+    stage.offsetWidth - padX,
+    stage.offsetHeight - padY - toolbar.offsetHeight - status.offsetHeight - toolbarMB - statusMT,
+  ];
+}
 function applyViewRotate(){
   const wrap = el("canvasWrap");
   const holder = el("canvasHolder");
+  const stage = el("stage");
   const a = rad(viewRollDeg);
+  const c = Math.cos(a), s = Math.sin(a);
   const w = 800, h = 480;
-  const bw = Math.abs(w * Math.cos(a)) + Math.abs(h * Math.sin(a));
-  const bh = Math.abs(w * Math.sin(a)) + Math.abs(h * Math.cos(a));
-  holder.style.width = Math.ceil(bw) + "px";
-  holder.style.height = Math.ceil(bh) + "px";
-  wrap.style.transform = "rotate(" + (-viewRollDeg) + "deg)";
+  const bw = Math.abs(w * c) + Math.abs(h * s);
+  const bh = Math.abs(w * s) + Math.abs(h * c);
+  // Border (3px each side) and the one-sided 6px shadow rotate with the frame.
+  // They paint outside the content box; #stage padding absorbs that until the
+  // fit is tight, and then it comes out of the free space so the frame is not cut off.
+  const boxW = w + 6, boxH = h + 6;
+  const frameW = Math.abs(boxW * c) + Math.abs(boxH * s);
+  const frameH = Math.abs(boxW * s) + Math.abs(boxH * c);
+  const shadowX = 6 * Math.abs(c + s);
+  const shadowY = 6 * Math.abs(c - s);
+  const cs = getComputedStyle(stage);
+  const padX = parseFloat(cs.paddingLeft) || 0;
+  const padY = parseFloat(cs.paddingTop) || 0;
+  // Holder is centered, so a one-sided overflow has to be reserved twice
+  // or that side still sticks out after the box is shrunk.
+  const overX = Math.max(0, (frameW - bw) / 2 + shadowX - padX);
+  const overY = Math.max(0, (frameH - bh) / 2 + shadowY - padY);
+  const [rawW, rawH] = stageAvailSize();
+  const availW = rawW - 2 * overX;
+  const availH = rawH - 2 * overY;
+  const slack = 2;
+  let scale = 1;
+  if (availW > slack && availH > slack && bw > 0 && bh > 0){
+    scale = Math.min(1, (availW - slack) / bw, (availH - slack) / bh);
+  }
+  if (!(scale > 0)) scale = 1;
+  viewScale = scale;
+  holder.style.width = Math.max(1, Math.floor(bw * scale)) + "px";
+  holder.style.height = Math.max(1, Math.floor(bh * scale)) + "px";
+  // Scale first, then rotate (CSS applies right to left).
+  wrap.style.transform = "rotate(" + (-viewRollDeg) + "deg) scale(" + scale + ")";
   const label = el("tiltDeg");
   if (label) label.textContent = Math.round(viewRollDeg) + "\u00b0";
   const slider = el("tiltSlider");
@@ -6119,6 +6261,12 @@ document.querySelectorAll(".tilt-snap").forEach(b=>{
   b.addEventListener("click", ()=> onTiltInput(b.dataset.deg));
 });
 applyViewRotate();
+if (typeof ResizeObserver !== "undefined"){
+  const fitObserver = new ResizeObserver(()=> applyViewRotate());
+  fitObserver.observe(el("stage"));
+  fitObserver.observe(el("toolbar"));
+  fitObserver.observe(el("status"));
+}
 
 /* ---------- top-bar buttons ---------- */
 el("btnPlay").addEventListener("click", ()=>{
