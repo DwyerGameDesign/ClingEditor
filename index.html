@@ -211,7 +211,7 @@
       <span class="tgl"><input type="checkbox" id="ovReach" checked><label for="ovReach">deflector reach</label></span>
       <span class="tgl"><input type="checkbox" id="ovSnap"><label for="ovSnap">snap zones</label></span>
       <span class="tgl"><input type="checkbox" id="ovHud" checked><label for="ovHud">time HUD</label></span>
-      <span class="tgl tilt-ctl" title="Device tilt (rest-relative). Rotates the view; gravity, jump/drop, and L/R sliders match gameplay.">
+      <span class="tgl tilt-ctl" title="Device tilt (rest-relative). Rotates the view; gravity, jump/drop, and sliders match gameplay.">
         <label for="tiltSlider">tilt</label>
         <input id="tiltSlider" type="range" min="-180" max="180" value="0" step="1">
         <b id="tiltDeg">0°</b>
@@ -429,7 +429,7 @@ function newObject(type, x, y){
       o.length = CFG.DEFAULT_WALL_LENGTH; o.angle = 0;
       break;
     case "peg": o.radius = CFG.DEFAULT_PEG_RADIUS; break;
-    case "deflector": o.length = CFG.DEFAULT_DEFLECTOR_LENGTH; o.angle = 0; o.group = (x < 0) ? "L" : "R"; break;
+    case "deflector": o.length = CFG.DEFAULT_DEFLECTOR_LENGTH; o.angle = 0; o.gravity = true; break;
     case "sweeper":
       o.length = CFG.DEFAULT_WALL_LENGTH; o.angle = 0; o.minAngle = 0; o.maxAngle = 90;
       o.speed = CFG.DEFAULT_SWEEPER_SPEED; break;
@@ -438,8 +438,7 @@ function newObject(type, x, y){
       o.speed = CFG.DEFAULT_TOGGLE_INTERVAL; break;
     case "sliding_wall":
       o.length = CFG.DEFAULT_WALL_LENGTH; o.angle = 0; o.slideAngle = 0;
-      o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5;
-      o.group = (x < 0) ? "L" : "R"; break;
+      o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5; break;
     case "moving_wall":
       o.length = CFG.DEFAULT_WALL_LENGTH; o.angle = 0; o.slideAngle = 0;
       o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5;
@@ -450,8 +449,7 @@ function newObject(type, x, y){
       o.speed = CFG.DEFAULT_MOVING_SPEED; break;
     case "sliding_hazard":
       o.radius = CFG.HAZARD_RADIUS_DEFAULT; o.slideAngle = 0;
-      o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5;
-      o.group = (x < 0) ? "L" : "R"; break;
+      o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5; break;
     case "pressure_plate":
       o.length = 40; o.angle = 0; o.link = 1; o.mode = "hold"; break;
     case "ballast":
@@ -531,14 +529,14 @@ const EXPORT_SPEC = {
   hazard:       {l1:["x","y","radius"], l2:[]},
   wall:         {l1:["x","y","length","angle","width"], l2:[]},
   peg:          {l1:["x","y","radius"], l2:[]},
-  deflector:    {l1:["x","y","length","angle","group"], l2:[]},
+  deflector:    {l1:["x","y","length","angle","gravity"], l2:[]},
   launcher:     {l1:["x","y","angle"], l2:[]},
   sweeper:      {l1:["x","y","length","angle"], l2:["minAngle","maxAngle","speed"]},
   toggle_wall:  {l1:["x","y","length","angle"], l2:["angleStep","speed"]},
-  sliding_wall: {l1:["x","y","length","angle"], l2:["slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"]},
+  sliding_wall: {l1:["x","y","length","angle"], l2:["slideAngle","slideRange","objectPosition","plateId","pressedPosition"]},
   moving_wall:  {l1:["x","y","length","angle"], l2:["slideAngle","slideRange","objectPosition","speed"]},
   moving_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","speed"]},
-  sliding_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"]},
+  sliding_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","plateId","pressedPosition"]},
   pressure_plate:{l1:["x","y","length","angle"], l2:["link","mode","holdFrames"]},
   ballast:      {l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition"]},
   crawler:      {l1:["x","y","radius"], l2:["direction","startPosition","speed"]},
@@ -585,6 +583,7 @@ function exportLevel(level){
       if (o[k] === undefined) continue;
       // Default wall width is implicit (CLING_WALL_WIDTH=10); omit from export.
       if (k === "width" && o.type === "wall" && o[k] === CFG.WALL_WIDTH) continue;
+      if (k === "gravity" && o[k] !== true) continue;
       if (k === "x"){
         parts.push("x = " + (xVals[i]+",").padEnd(xW+1));
       } else if (k === "y"){
@@ -732,7 +731,7 @@ const KNOWN_KEYS = {
   hazard:["x","y","radius"],
   wall:["x","y","length","angle","width"],
   peg:["x","y","radius"],
-  deflector:["x","y","length","angle","group"],
+  deflector:["x","y","length","angle","gravity"],
   launcher:["x","y","angle"],
   sweeper:["x","y","length","angle","minAngle","maxAngle","speed"],
   toggle_wall:["x","y","length","angle","angleStep","speed"],
@@ -762,7 +761,7 @@ const LEVEL_CODEC = {
   hazard:["x","y","radius"],
   wall:["x","y","length","angle","width"],
   peg:["x","y","radius"],
-  deflector:["x","y","length","angle","group"],
+  deflector:["x","y","length","angle","gravity"],
   launcher:["x","y","angle"],
   sweeper:["x","y","length","angle","minAngle","maxAngle","speed"],
   toggle_wall:["x","y","length","angle","angleStep","speed"],
@@ -895,6 +894,12 @@ const LEVEL_CODEC = {
   },
   parseValue(key, raw){
     if (raw == null || raw === "") return undefined;
+    if (key === "gravity"){
+      const u = this.unescape(raw);
+      if (u === "true" || u === "L" || u === "R") return true;
+      if (u === "false") return false;
+      throw new Error("bad gravity: " + raw);
+    }
     if (this.LETTER_OR_NUMBER_KEYS.has(key)){
       const u = this.unescape(raw);
       if (/^[A-Za-z]$/.test(u)) return u;
@@ -940,10 +945,15 @@ const LEVEL_CODEC = {
     let lastPresent = 0;
     for (let i = 0; i < keys.length; i++){
       const key = keys[i];
-      const val = o[key];
-      if (val === undefined || val === null || this.isDefault(typ, key, val)){
+      let val = o[key];
+      // Slider group is a legacy positional slot. Never emit it.
+      const gravityOn = val === true || val === "true" || val === "L" || val === "R";
+      if (key === "group" || (key === "gravity" && !gravityOn)){
+        fields.push("");
+      } else if (val === undefined || val === null || this.isDefault(typ, key, val)){
         fields.push("");
       } else {
+        if (key === "gravity") val = true;
         fields.push(this.formatValue(key, val));
         lastPresent = i + 1;
       }
@@ -966,8 +976,11 @@ const LEVEL_CODEC = {
       if (raw === undefined || raw === ""){
         if (defaults[key] !== undefined) o[key] = defaults[key];
       } else {
-        try { o[key] = this.parseValue(key, raw); }
+        let val;
+        try { val = this.parseValue(key, raw); }
         catch (e){ return {ok:false, err:String(e.message || e)}; }
+        // Legacy slider group: consume the cell, do not keep the value.
+        if (key !== "group") o[key] = val;
       }
     }
     return {ok:true, obj:o};
@@ -1192,16 +1205,44 @@ function importLevelFromLua(text){
       }
     }
     if (o._extra && Object.keys(o._extra).length === 0) delete o._extra;
+    // Deflector gravity is opt-in. newObject defaults it on, which would turn
+    // an omitted field into a tilt blade. Legacy group L/R means gravity on.
+    let deflectorGravity = null;
+    if (type === "deflector"){
+      const gv = m.gravity;
+      const legacy = (m.group === "L" || m.group === "R") ? m.group
+        : (o._extra && (o._extra.group === "L" || o._extra.group === "R") ? o._extra.group : null);
+      if (gv === true || gv === "true" || gv === "L" || gv === "R"){
+        deflectorGravity = true;
+      } else if (legacy){
+        deflectorGravity = true;
+        notes.push("deflector: converted group \""+legacy+"\" → gravity.");
+      } else {
+        deflectorGravity = false;
+      }
+      delete o.gravity;
+      delete o.group;
+      if (o._extra) delete o._extra.group;
+    }
+    if (type === "sliding_wall" || type === "sliding_hazard"){
+      delete o.group;
+      if (o._extra) delete o._extra.group;
+    }
+    if (o._extra && Object.keys(o._extra).length === 0) delete o._extra;
     // fill required defaults (same as game constructors)
     const d = newObject(type, o.x ?? 0, o.y ?? 0);
     for (const [k,v] of Object.entries(d)) if (o[k] === undefined) o[k] = v;
+    if (type === "deflector"){
+      if (deflectorGravity) o.gravity = true;
+      else delete o.gravity;
+    }
     level.objects.push(o);
   }
   return {level, notes};
 }
 
 /* ---------- built-in level library (verbatim from levels.lua) ---------- */
-const BUILTIN_LEVELS = [{"n":1,"name":"First Roll","lua":"{ name = \"First Roll\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    tutorial = \"Crank = roll.\",\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"key\", x = 0, y = -100 },\n    { type = \"key\", x = 180, y = 0 },\n    { type = \"key\", x = 0, y = 100 },\n    { type = \"exit\", x = -175, y = 60 },\n  }}"},{"n":2,"name":"Step Down","lua":"{ name = \"Step Down\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Down = DROP\",\n    objects = {\n    { type = \"spawn\", x = -150, y = 70 },\n    { type = \"deflector\", x = -100, y = 70, length = 100, angle = 0 },\n    { type = \"deflector\", x = 0, y = 0, length = 140, angle = 0 },\n    { type = \"deflector\", x = 100, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -60, y = 80 },\n    { type = \"key\", x = 0, y = 10 },\n    { type = \"key\", x = 65, y = -60 },\n    { type = \"exit\", x = 140, y = -60 },\n  }}"},{"n":3,"name":"Step Up","lua":"{ name = \"Step Up\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Up = JUMP\",\n    objects = {\n    { type = \"spawn\", x = -140, y = -50 },\n    { type = \"wall\", x = 0, y = 0, length = 140, angle = 0, width = 15 },\n    { type = \"wall\", x = -100, y = -65, length = 100, angle = 0, width = 15 },\n    { type = \"wall\", x = 100, y = 65, length = 100, angle = 0, width = 15 },\n    { type = \"key\", x = -60, y = -50 },\n    { type = \"key\", x = 0, y = 15 },\n    { type = \"key\", x = 60, y = 80 },\n    { type = \"exit\", x = 140, y = 80 },\n  }}"},{"n":4,"name":"Teeter Totter","lua":"{ name = \"Teeter Totter\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"LEFT = Control Objects\",\n    objects = {\n    { type = \"spawn\", x = -150, y = 0 },\n    { type = \"key\", x = 0, y = 5 },\n    { type = \"exit\", x = 150, y = 5 },\n    { type = \"deflector\", x = 0, y = -5, length = 320, angle = 0 },\n    { type = \"sliding_hazard\", x = -75, y = 30, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0, group = \"L\" },\n    { type = \"sliding_hazard\", x = 75, y = -30, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0, group = \"L\" },\n  }}"},{"n":5,"name":"NewDesign 1","lua":"{ name = \"NewDesign 1\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = 25 },\n    { type = \"key\", x = -160, y = -10 },\n    { type = \"key\", x = 160, y = -10 },\n    { type = \"key\", x = 0, y = 30 },\n    { type = \"exit\", x = 150, y = 85 },\n    { type = \"deflector\", x = 0, y = -30, length = 120, angle = 0, group = \"L\" },\n    { type = \"deflector\", x = -160, y = 25, length = 70, angle = 0 },\n    { type = \"deflector\", x = 150, y = -40, length = 70, angle = 330 },\n    { type = \"deflector\", x = -150, y = -40, length = 70, angle = 30 },\n    { type = \"wall\", x = 150, y = 65, length = 70, angle = 0 },\n  }}"},{"n":6,"name":"Gravity Gym","lua":"{ name = \"Gravity Gym\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"TILT to slide, FLIP gravity\",\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -150, y = -70, length = 60, angle = 0 },\n    { type = \"sliding_wall\", x = -115, y = -78, length = 60, angle = 0, slideAngle = 0, slideRange = 25, objectPosition = 0.0, group = \"L\" },\n    { type = \"deflector\", x = -10, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -30, y = -50 },\n    { type = \"deflector\", x = 70, y = -70, length = 80, angle = 0 },\n    { type = \"sliding_hazard\", x = 60, y = -25, radius = 20, slideAngle = 90, slideRange = 40, objectPosition = 1.0, group = \"R\" },\n    { type = \"key\", x = 100, y = -52 },\n    { type = \"deflector\", x = 162, y = -100, length = 36, angle = 0 },\n    { type = \"key\", x = 162, y = -90 },\n    { type = \"exit\", x = 170, y = -100 },\n  }}"},{"n":7,"name":"Tripwire","lua":"{ name = \"Tripwire\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Roll the plate. Beat the door.\",\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -125, y = -70, length = 90, angle = 0 },\n    { type = \"pressure_plate\", x = -60, y = -70, length = 36, angle = 0, link = 1, mode = \"trigger\", holdFrames = 40 },\n    { type = \"deflector\", x = -21, y = -70, length = 40, angle = 0 },\n    { type = \"sliding_wall\", x = 1, y = -15, length = 80, angle = 90, slideAngle = 90, slideRange = 40, objectPosition = 1.0, plateId = 1, pressedPosition = 0.0 },\n    { type = \"deflector\", x = 89, y = -70, length = 176, angle = 0 },\n    { type = \"key\", x = 50, y = -55 },\n    { type = \"exit\", x = 160, y = -70 },\n  }}"},{"n":8,"name":"Counterweight","lua":"{ name = \"Counterweight\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"TILT the weight onto the plate.\",\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -125, y = -70, length = 90, angle = 0 },\n    { type = \"deflector\", x = -21, y = -70, length = 40, angle = 0 },\n    { type = \"sliding_wall\", x = 1, y = -15, length = 80, angle = 90, slideAngle = 90, slideRange = 40, objectPosition = 1.0, plateId = 1, pressedPosition = 0.0 },\n    { type = \"deflector\", x = 89, y = -70, length = 176, angle = 0 },\n    { type = \"ballast\", x = -40, y = 20, radius = 8, slideAngle = 0, slideRange = 50, objectPosition = 0.0 },\n    { type = \"pressure_plate\", x = 10, y = 20, length = 28, angle = 0, link = 1, mode = \"hold\" },\n    { type = \"key\", x = 50, y = -55 },\n    { type = \"exit\", x = 160, y = -70 },\n  }}"},{"n":9,"name":"Two Banks","lua":"{ name = \"Two Banks\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Tilt each way. Latches stay.\",\n    objects = {\n    { type = \"spawn\", x = -160, y = -70 },\n    { type = \"deflector\", x = -140, y = -70, length = 80, angle = 0 },\n    { type = \"sliding_wall\", x = -99, y = -15, length = 80, angle = 90, slideAngle = 90, slideRange = 40, objectPosition = 1.0, plateId = 1, pressedPosition = 0.0 },\n    { type = \"deflector\", x = -50, y = -70, length = 96, angle = 0 },\n    { type = \"sliding_wall\", x = -1, y = -15, length = 80, angle = 90, slideAngle = 90, slideRange = 40, objectPosition = 1.0, plateId = 2, pressedPosition = 0.0 },\n    { type = \"deflector\", x = 70, y = -70, length = 140, angle = 0 },\n    { type = \"deflector\", x = -100, y = 10, length = 80, angle = 0, group = \"L\" },\n    { type = \"pressure_plate\", x = -69, y = -16, length = 24, angle = 40, link = 1, mode = \"latch\" },\n    { type = \"deflector\", x = 70, y = 10, length = 80, angle = 0, group = \"L\" },\n    { type = \"pressure_plate\", x = 101, y = 36, length = 24, angle = -40, link = 2, mode = \"latch\" },\n    { type = \"key\", x = -40, y = -55 },\n    { type = \"exit\", x = 120, y = -70 },\n  }}"}];
+const BUILTIN_LEVELS = [{"n":1,"name":"First Roll","lua":"{ name = \"First Roll\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    tutorial = \"Crank = roll.\",\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"key\", x = 0, y = -100 },\n    { type = \"key\", x = 180, y = 0 },\n    { type = \"key\", x = 0, y = 100 },\n    { type = \"exit\", x = -175, y = 60 },\n  }}"},{"n":2,"name":"Step Down","lua":"{ name = \"Step Down\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Down = DROP\",\n    objects = {\n    { type = \"spawn\", x = -150, y = 70 },\n    { type = \"deflector\", x = -100, y = 70, length = 100, angle = 0 },\n    { type = \"deflector\", x = 0, y = 0, length = 140, angle = 0 },\n    { type = \"deflector\", x = 100, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -60, y = 80 },\n    { type = \"key\", x = 0, y = 10 },\n    { type = \"key\", x = 65, y = -60 },\n    { type = \"exit\", x = 140, y = -60 },\n  }}"},{"n":3,"name":"Step Up","lua":"{ name = \"Step Up\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Up = JUMP\",\n    objects = {\n    { type = \"spawn\", x = -140, y = -50 },\n    { type = \"wall\", x = 0, y = 0, length = 140, angle = 0, width = 15 },\n    { type = \"wall\", x = -100, y = -65, length = 100, angle = 0, width = 15 },\n    { type = \"wall\", x = 100, y = 65, length = 100, angle = 0, width = 15 },\n    { type = \"key\", x = -60, y = -50 },\n    { type = \"key\", x = 0, y = 15 },\n    { type = \"key\", x = 60, y = 80 },\n    { type = \"exit\", x = 140, y = 80 },\n  }}"},{"n":4,"name":"Teeter Totter","lua":"{ name = \"Teeter Totter\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"LEFT = Control Objects\",\n    objects = {\n    { type = \"spawn\", x = -150, y = 0 },\n    { type = \"key\", x = 0, y = 5 },\n    { type = \"exit\", x = 150, y = 5 },\n    { type = \"deflector\", x = 0, y = -5, length = 320, angle = 0 },\n    { type = \"sliding_hazard\", x = -75, y = 30, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0 },\n    { type = \"sliding_hazard\", x = 75, y = -30, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0 },\n  }}"},{"n":5,"name":"NewDesign 1","lua":"{ name = \"NewDesign 1\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = 25 },\n    { type = \"key\", x = -160, y = -10 },\n    { type = \"key\", x = 160, y = -10 },\n    { type = \"key\", x = 0, y = 30 },\n    { type = \"exit\", x = 150, y = 75 },\n    { type = \"deflector\", x = 0, y = -30, length = 120, angle = 0, gravity = true },\n    { type = \"deflector\", x = -160, y = 25, length = 70, angle = 0 },\n    { type = \"deflector\", x = 150, y = -40, length = 70, angle = 330 },\n    { type = \"deflector\", x = -150, y = -40, length = 70, angle = 30 },\n    { type = \"wall\", x = 150, y = 55, length = 70, angle = 0 },\n  }}"},{"n":6,"name":"Gravity Gym","lua":"{ name = \"Gravity Gym\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"TILT to slide, FLIP gravity\",\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -150, y = -70, length = 60, angle = 0 },\n    { type = \"sliding_wall\", x = -115, y = -78, length = 60, angle = 0, slideAngle = 0, slideRange = 25, objectPosition = 0.0 },\n    { type = \"deflector\", x = -10, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -30, y = -50 },\n    { type = \"deflector\", x = 70, y = -70, length = 80, angle = 0 },\n    { type = \"sliding_hazard\", x = 60, y = -25, radius = 20, slideAngle = 90, slideRange = 40, objectPosition = 1.0 },\n    { type = \"key\", x = 100, y = -52 },\n    { type = \"deflector\", x = 162, y = -100, length = 36, angle = 0 },\n    { type = \"key\", x = 162, y = -90 },\n    { type = \"exit\", x = 170, y = -100 },\n  }}"},{"n":7,"name":"Tripwire","lua":"{ name = \"Tripwire\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Roll the plate. Beat the door.\",\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -125, y = -70, length = 90, angle = 0 },\n    { type = \"pressure_plate\", x = -60, y = -70, length = 36, angle = 0, link = 1, mode = \"trigger\", holdFrames = 40 },\n    { type = \"deflector\", x = -21, y = -70, length = 40, angle = 0 },\n    { type = \"sliding_wall\", x = 1, y = -15, length = 80, angle = 90, slideAngle = 90, slideRange = 40, objectPosition = 1.0, plateId = 1, pressedPosition = 0.0 },\n    { type = \"deflector\", x = 89, y = -70, length = 176, angle = 0 },\n    { type = \"key\", x = 50, y = -55 },\n    { type = \"exit\", x = 160, y = -70 },\n  }}"},{"n":8,"name":"Counterweight","lua":"{ name = \"Counterweight\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"TILT the weight onto the plate.\",\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -125, y = -70, length = 90, angle = 0 },\n    { type = \"deflector\", x = -21, y = -70, length = 40, angle = 0 },\n    { type = \"sliding_wall\", x = 1, y = -15, length = 80, angle = 90, slideAngle = 90, slideRange = 40, objectPosition = 1.0, plateId = 1, pressedPosition = 0.0 },\n    { type = \"deflector\", x = 89, y = -70, length = 176, angle = 0 },\n    { type = \"ballast\", x = -40, y = 20, radius = 8, slideAngle = 0, slideRange = 50, objectPosition = 0.0 },\n    { type = \"pressure_plate\", x = 10, y = 20, length = 28, angle = 0, link = 1, mode = \"hold\" },\n    { type = \"key\", x = 50, y = -55 },\n    { type = \"exit\", x = 160, y = -70 },\n  }}"},{"n":9,"name":"Two Banks","lua":"{ name = \"Two Banks\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    tutorial = \"Tilt each way. Latches stay.\",\n    objects = {\n    { type = \"spawn\", x = -160, y = -70 },\n    { type = \"deflector\", x = -140, y = -70, length = 80, angle = 0 },\n    { type = \"sliding_wall\", x = -99, y = -15, length = 80, angle = 90, slideAngle = 90, slideRange = 40, objectPosition = 1.0, plateId = 1, pressedPosition = 0.0 },\n    { type = \"deflector\", x = -50, y = -70, length = 96, angle = 0 },\n    { type = \"sliding_wall\", x = -1, y = -15, length = 80, angle = 90, slideAngle = 90, slideRange = 40, objectPosition = 1.0, plateId = 2, pressedPosition = 0.0 },\n    { type = \"deflector\", x = 70, y = -70, length = 140, angle = 0 },\n    { type = \"deflector\", x = -100, y = 10, length = 80, angle = 0, gravity = true },\n    { type = \"pressure_plate\", x = -69, y = -16, length = 24, angle = 40, link = 1, mode = \"latch\" },\n    { type = \"deflector\", x = 70, y = 10, length = 80, angle = 0, gravity = true },\n    { type = \"pressure_plate\", x = 101, y = 36, length = 24, angle = -40, link = 2, mode = \"latch\" },\n    { type = \"key\", x = -40, y = -55 },\n    { type = \"exit\", x = 120, y = -70 },\n  }}"}];
 /* =====================================================================
    GAMEPLAY SIMULATION — faithful port of rails.lua + cling_ball.lua +
    the game glue in main.lua. Screen space (Y-down). Rails arrays are
@@ -1385,8 +1426,8 @@ function stepSliderGravity(obj, rollDeg){
 function followsTilt(o){
   if (!o) return false;
   if (o.plateId != null || o.plateDriven) return false;
-  if (o.group !== "L" && o.group !== "R") return false;
-  return o.type === "deflector" || o.type === "sliding_wall" || o.type === "sliding_hazard";
+  if (o.type === "deflector") return o.gravity === true;
+  return o.type === "sliding_wall" || o.type === "sliding_hazard";
 }
 
 /* ---------------- rails.lua ---------------- */
@@ -1752,9 +1793,11 @@ function makeSimObjects(level){
       case "wall": case "deflector":
         o.length = a.length; o.angle = a.angle||0;
         if (a.type === "wall" && typeof a.width === "number") o.width = a.width;
-        // Deflector: L/R = crankable; omit/invalid group = static blade (no invent).
-        if (a.type === "deflector" && (a.group === "L" || a.group === "R")) o.group = a.group;
-        if (a.type === "deflector") o._cfg = { angle: o.angle };
+        // gravity true follows tilt; omit = static blade.
+        if (a.type === "deflector"){
+          o.gravity = a.gravity === true;
+          o._cfg = { angle: o.angle };
+        }
         break;
       case "peg":
         o.radius = (typeof a.radius === "number") ? a.radius : CFG.DEFAULT_PEG_RADIUS;
@@ -1797,9 +1840,6 @@ function makeSimObjects(level){
           o.restPosition = o.objectPosition;
         }
         if (a.type === "sliding_wall" || a.type === "sliding_hazard"){
-          if (!o.plateDriven){
-            o.group = (a.group === "L" || a.group === "R") ? a.group : ((a.x < 0) ? "L" : "R");
-          }
           o._slideVel = 0;
         } else {
           o.speed = resolveSpeed(a.type, a.speed);
@@ -1916,7 +1956,7 @@ function createClingSim(level){
     keysTotal,
     exitUnlocked: keysTotal === 0,
     selTarget: "cling",
-    groups: { L: [], R: [] },
+    tilt: [],
     frameCount: 0,
     tutorial: level.tutorial || "",
     levelName: level.name || "",
@@ -1924,16 +1964,12 @@ function createClingSim(level){
     gravityVec,
   };
   for (const obj of objects){
-    // Launchers dock on contact; never in L/R groups.
-    // Deflector without L/R is a static blade. Sliders without L/R fall back to R in sim
-    // (game uses x-sign); only L/R members are crankable.
+    // Launchers dock on contact. A deflector follows tilt only with gravity.
+    // Sliders follow tilt unless a plate drives them.
     if (obj.type==="deflector" || obj.type==="sliding_wall" || obj.type==="sliding_hazard"){
       if (obj.plateDriven) continue;
-      if (obj.group !== "L" && obj.group !== "R"){
-        if (obj.type === "deflector"){ obj.group = null; continue; }
-        obj.group = "R";
-      }
-      game.groups[obj.group].push(obj);
+      if (obj.type === "deflector" && !obj.gravity) continue;
+      game.tilt.push(obj);
     }
   }
 
@@ -2930,7 +2966,7 @@ function createClingSim(level){
     applyTransfer(best.rail, best.s, sign, push, travelDir, leftIndex);
   }
 
-  /** Auto-dock on mouth/housing proximity. Independent of L/R group selection. */
+  /** Auto-dock on mouth/housing proximity. Independent of tilt selection. */
   function tryBoardLauncher(){
     if (ball.mode === "flight" || ball.mode === "falling") return;
     if (ball.ignoreLauncherFrames > 0){
@@ -4015,9 +4051,8 @@ function createClingSim(level){
   function applyAccelToCrankables(){
     if (game.levelComplete) return;
     const rollDeg = viewRollDeg;
-    for (const which of ["L", "R"]){
-      const members = game.groups[which];
-      if (!members) continue;
+    const members = game.tilt;
+    if (members){
       for (const obj of members){
         if (obj.type === "deflector"){
           const base = (obj._cfg && obj._cfg.angle) || 0;
@@ -4080,21 +4115,6 @@ function createClingSim(level){
       tryJump();
     }
   }
-  function selectGroup(which){
-    if (which !== "L" && which !== "R") return;
-    const members = game.groups[which];
-    if (!members || !members.length) return;
-    if (game.selTarget === which){
-      game.selTarget = "cling";
-      return;
-    }
-    game.selTarget = which;
-  }
-  function crankSelectedGroup(change){
-    const members = game.groups[game.selTarget];
-    if (!members) return;
-    for (const obj of members) applyCrankToObject(obj, change);
-  }
   function pushBallastFromCrank(){
     if (ball.mode !== "cling") return;
     const owner = (game.railOwners || [])[ball.rail];
@@ -4138,15 +4158,11 @@ function createClingSim(level){
     }
     if (isInFlight()) return;
     if (isFalling()){
-      if (game.selTarget === "L" || game.selTarget === "R") crankSelectedGroup(change);
-      else airCrank(change);
+      airCrank(change);
       return;
     }
-    if (game.selTarget === "cling"){
-      crank(change);
-      pushBallastFromCrank();
-    }
-    else if (game.selTarget === "L" || game.selTarget === "R") crankSelectedGroup(change);
+    crank(change);
+    pushBallastFromCrank();
   }
   function restartLevel(){
     for (const obj of objects){
@@ -4249,8 +4265,6 @@ function createClingSim(level){
     if (isInFlight()) return "FLIGHT";
     if (isFalling()) return "FALLING";
     if (game.selTarget === "cling") return "CRANK: CLING";
-    if (game.selTarget === "L") return "CRANK: L GROUP";
-    if (game.selTarget === "R") return "CRANK: GROUP R";
     return "CRANK: ?";
   }
 
@@ -4269,7 +4283,7 @@ function createClingSim(level){
 
   return {
     game, ball, objects, keysTotal,
-    update, handleCrank, selectCling, selectGroup, tryDrop, tryJump, onAwayFromGravity,
+    update, handleCrank, selectCling, tryDrop, tryJump, onAwayFromGravity,
     restartLevel, applyAccelToCrankables,
     worldPos, selectionLabel, fire,
     isDocked, isInFlight, isFalling,
@@ -4580,19 +4594,7 @@ function drawGravityBadgeAtS(cx, cy){
   ctx.fillStyle = INK;
   ctx.beginPath(); ctx.arc(cx + gx * 3.5, cy + gy * 3.5, 2, 0, 7); ctx.fill();
 }
-function drawGroupBadgeAtS(cx, cy, group){
-  if (group === "L" || group === "R"){
-    drawGravityBadgeAtS(cx, cy);
-    return;
-  }
-  // Ungrouped warning marker (authoring only, not a player mark).
-  ctx.strokeStyle = dither(0.35); ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.arc(cx,cy,8,0,7); ctx.stroke();
-  ctx.fillStyle = INK; ctx.font = "10px monospace"; ctx.textAlign = "center";
-  ctx.fillText("?", cx, cy+3);
-  ctx.textAlign = "left";
-}
-function drawDeflectorAtS(cx,cy,length,angleDeg,selected,group){
+function drawDeflectorAtS(cx,cy,length,angleDeg,selected,gravity){
   // BLADE: thin centerline + rounded tips; plumb only if tilt-driven (static = rail only).
   const a = rad(angleDeg), c=Math.cos(a), s=Math.sin(a), hL=length/2;
   const x1=cx-c*hL, y1=cy-s*hL, x2=cx+c*hL, y2=cy+s*hL;
@@ -4604,11 +4606,11 @@ function drawDeflectorAtS(cx,cy,length,angleDeg,selected,group){
   ctx.fillStyle = INK;
   ctx.beginPath(); ctx.arc(x1,y1,tipR,0,7); ctx.fill();
   ctx.beginPath(); ctx.arc(x2,y2,tipR,0,7); ctx.fill();
-  if (group === "L" || group === "R") drawGroupBadgeAtS(cx, cy, group);
+  if (gravity) drawGravityBadgeAtS(cx, cy);
 }
 function drawDeflector(o,i,selected){
   const [cx,cy] = toScreen(o.x,o.y);
-  drawDeflectorAtS(cx,cy,o.length,effAngle(o,i),selected,o.group);
+  drawDeflectorAtS(cx,cy,o.length,effAngle(o,i),selected,o.gravity === true);
 }
 function drawPressurePlate(o,i){
   const rt = (playing && runtime && runtime[i]) ? runtime[i] : null;
@@ -4832,7 +4834,7 @@ function drawObject(o,i){
       const [cx,cy]=slideBodyScreen(o,effPos(o,i));
       drawWallBody(cx,cy,o.length,effAngle(o,i), selected?7:undefined, CFG.BAR_WIDTH);
       if (o.plateId != null) drawLinkBadgeAtS(cx, cy, o.plateId);
-      else drawGroupBadgeAtS(cx, cy, o.group);
+      else drawGravityBadgeAtS(cx, cy);
       break;
     }
     case "moving_wall": {
@@ -4852,7 +4854,7 @@ function drawObject(o,i){
       const [cx,cy]=slideBodyScreen(o,effPos(o,i));
       drawHazardBody(cx,cy,o.radius,frame);
       if (o.plateId != null) drawLinkBadgeAtS(cx, cy, o.plateId);
-      else drawGroupBadgeAtS(cx, cy, o.group);
+      else drawGravityBadgeAtS(cx, cy);
       break;
     }
     case "ballast": {
@@ -5224,9 +5226,9 @@ const testKeys = new Set();
 const KEY_CRANK_DEG = 9, KEY_CRANK_FINE = 3;
 
 function isCrankableGrouped(o){
-  // Matches game: plate-driven excluded; deflector needs L/R; sliders without group still count (game assigns).
+  // Matches game: plate-driven excluded; deflector needs gravity; sliders always count.
   if (!CRANKABLE.has(o.type) || o.plateId != null) return false;
-  if (o.type === "deflector") return o.group === "L" || o.group === "R";
+  if (o.type === "deflector") return o.gravity === true;
   return true;
 }
 function startTest(){
@@ -5243,7 +5245,7 @@ function startTest(){
   wheelAccum = 0; testKeys.clear();
   el("btnTest").innerHTML = "&#9632; Stop test";
   el("btnTest").classList.add("active");
-  el("stMode").innerHTML = "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>tilt</b> gravity &nbsp;<b>&#8593;</b> CLING/FIRE &nbsp;<b>&#8595;</b> drop &nbsp;<b>Q/E</b> group L/R &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit";
+  el("stMode").innerHTML = "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>tilt</b> gravity &nbsp;<b>&#8593;</b> CLING/FIRE &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit";
   cv.style.cursor = "default";
   cv.focus && cv.focus();
 }
@@ -5378,10 +5380,8 @@ function drawSim(sim){
 
   const docked = sim.isDocked() ? ball.dockedLauncher : null;
   for (const obj of sim.objects){
-    // Launchers highlight only while docked (never via L/R group select).
-    let isSelected = obj.type === "launcher"
-      ? (docked === obj)
-      : !!(obj.group && !obj.plateDriven && g.selTarget === obj.group);
+    // Launchers highlight only while docked.
+    const isSelected = obj.type === "launcher" && docked === obj;
     switch(obj.type){
       case "spawn": drawSpawnAtS(obj.x, obj.y); break;
       case "exit": drawExitAtS(obj.x, obj.y, g.exitUnlocked || (g.keysTotal||0)===0); break;
@@ -5417,7 +5417,7 @@ function drawSim(sim){
         break;
       }
       case "sweeper": drawSweeperAtS(obj.x, obj.y, obj.length, obj.angle); break;
-      case "deflector": drawDeflectorAtS(obj.x, obj.y, obj.length, obj.angle, isSelected, obj.group); break;
+      case "deflector": drawDeflectorAtS(obj.x, obj.y, obj.length, obj.angle, isSelected, obj.gravity === true); break;
       case "sliding_wall": {
         drawSlideRailSim(obj);
         const [cx,cy] = slideCenterOfSim(obj);
@@ -5425,7 +5425,7 @@ function drawSim(sim){
         const plate = sim.objects.find(p => p.type === "pressure_plate" && p.link === obj.plateId);
         drawTriggerReturnClock(obj, cx, cy, plate);
         if (obj.plateDriven && obj.plateId != null) drawLinkBadgeAtS(cx, cy, obj.plateId);
-        else if (!obj.plateDriven) drawGroupBadgeAtS(cx, cy, obj.group);
+        else if (!obj.plateDriven) drawGravityBadgeAtS(cx, cy);
         break;
       }
       case "moving_wall": {
@@ -5447,7 +5447,7 @@ function drawSim(sim){
         const plate = sim.objects.find(p => p.type === "pressure_plate" && p.link === obj.plateId);
         drawTriggerReturnClock(obj, cx, cy, plate);
         if (obj.plateDriven && obj.plateId != null) drawLinkBadgeAtS(cx, cy, obj.plateId);
-        else if (!obj.plateDriven) drawGroupBadgeAtS(cx, cy, obj.group);
+        else if (!obj.plateDriven) drawGravityBadgeAtS(cx, cy);
         break;
       }
       case "ballast": {
@@ -5705,27 +5705,11 @@ function validate(){
     warns.push("Bottom border is open — no arena floor snap.");
   }
 
-  // L/R group authoring checks
-  const grouped = { L: [], R: [] };
   objs.forEach((o,i)=>{
     if (!CRANKABLE.has(o.type) || o.plateId != null) return;
-    if (o.group !== "L" && o.group !== "R"){
-      if (o.type === "deflector")
-        infos.push(`#${i+1} deflector has no group — static blade (not crankable).`);
-      else
-        warns.push(`#${i+1} ${o.type} has no group (L/R) — game will assign by x sign.`);
-      return;
-    }
-    grouped[o.group].push({o,i});
+    if (o.type === "deflector" && o.gravity !== true)
+      infos.push(`#${i+1} deflector has no gravity — static blade (not crankable).`);
   });
-  for (const g of ["L","R"]){
-    const members = grouped[g];
-    if (!members.length) continue;
-    const wrongSide = members.every(({o}) => g === "L" ? o.x >= 0 : o.x < 0);
-    if (wrongSide){
-      warns.push(`Group ${g}: all members sit on the ${g==="L"?"right":"left"} side (soft style hint).`);
-    }
-  }
 
   const plateLinks = {}, plateTargets = {};
   objs.forEach((o,i)=>{
@@ -5737,8 +5721,8 @@ function validate(){
     if (o.plateId != null){
       if (o.type !== "sliding_wall" && o.type !== "sliding_hazard")
         warns.push(`#${i+1} plateId on invalid type ${o.type}.`);
-      if (o.group != null)
-        warns.push(`#${i+1} plate-driven ${o.type} must not have group.`);
+      if (o.gravity)
+        warns.push(`#${i+1} plate-driven ${o.type} must not set gravity.`);
       plateTargets[o.plateId] = (plateTargets[o.plateId]||0)+1;
     }
   });
@@ -5881,7 +5865,7 @@ function renderProps(){
     box.appendChild(propNum("radius", "radius", o, {min:2}));
   if (t === "ballast"){
     const hint = document.createElement("div"); hint.className = "hint";
-    hint.textContent = "tilt weight on a wire. parks at the downhill stop. presses plates. not an L/R crankable";
+    hint.textContent = "tilt weight on a wire. parks at the downhill stop. presses plates. not a tilt crankable";
     box.appendChild(hint);
   }
   if (t==="crawler"){
@@ -5971,28 +5955,21 @@ function renderProps(){
   }
   if (ANGLED.has(t))
     box.appendChild(propNum("angle °", "angle", o, {step:15}));
-  if (CRANKABLE.has(t) && o.plateId == null){
-    if (t === "deflector"){
-      const cur = (o.group === "L" || o.group === "R") ? o.group : "—";
-      const row = document.createElement("div"); row.className="prop-row";
-      const lab = document.createElement("label"); lab.textContent = "group";
-      row.append(lab, segControl(["—","L","R"], cur, (opt)=>{
-        stopPlay(); pushUndo();
-        if (opt === "—") delete o.group; else o.group = opt;
-        commit(); renderProps();
-      }));
-      box.appendChild(row);
-      const hint = document.createElement("div"); hint.className="hint";
-      hint.textContent = "L/R = crankable; — = static blade (omit group)";
-      box.appendChild(hint);
-    } else {
-      box.appendChild(propSeg("group", "group", o, ["L","R"], (G)=>{
-        o.group = G;
-      }));
-      const hint = document.createElement("div"); hint.className="hint";
-      hint.textContent = "L/R dpad selects this group; linked members share the crank";
-      box.appendChild(hint);
-    }
+  if (t === "deflector"){
+    const row = document.createElement("div"); row.className="prop-row";
+    const lab = document.createElement("label"); lab.textContent = "gravity";
+    const inp = document.createElement("input"); inp.type = "checkbox";
+    inp.checked = o.gravity === true;
+    inp.addEventListener("change", ()=>{
+      stopPlay(); pushUndo();
+      if (inp.checked) o.gravity = true; else delete o.gravity;
+      commit(); renderProps();
+    });
+    row.append(lab, inp);
+    box.appendChild(row);
+    const hint = document.createElement("div"); hint.className="hint";
+    hint.textContent = "on = follows tilt; off = static blade (omit gravity)";
+    box.appendChild(hint);
   }
   if (t === "pressure_plate"){
     box.appendChild(propNum("length", "length", o, {min:10, step:1}));
@@ -6378,12 +6355,6 @@ window.addEventListener("keydown", e=>{
         e.preventDefault();
         if (!testSim.game.levelComplete) testSim.tryDrop();
         return;
-      case "Tab":
-        e.preventDefault(); testSim.selectGroup(e.shiftKey ? "L" : "R"); return;
-      case "q": case "Q":
-        testSim.selectGroup("L"); return;
-      case "e": case "E":
-        testSim.selectGroup("R"); return;
       case "r": case "R":
         testSim.restartLevel(); return;
       case "Escape":
