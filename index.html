@@ -1247,10 +1247,9 @@ const SIM = {
   JUMP_MIN_HEIGHT: 32,  // variable-height floor (short tap)
   JUMP_VARIABLE: true,  // release Up early to cut the rise
   JUMP_CUT_FACTOR: 0.85,  // v *= this when Up releases while still rising
-  JUMP_NORMAL_BIAS: 0,  // 0 = pure anti-gravity (crank adds sideways); 1 = pure surface normal
-  JUMP_TANGENT_INHERIT: 0.6,  // fraction of along-rail crank speed carried out
-  JUMP_TANGENT_MAX: 5,  // px/frame clamp on inherited tangential speed
-  JUMP_TANGENT_UP_MAX: 2.57,  // px/frame; sqrt(2g*64)-sqrt(2g*32) at g=0.6
+  JUMP_NORMAL_BIAS: 0,  // 0 = pure anti-gravity; 1 = pure surface normal
+  JUMP_TANGENT_INHERIT: 0.6,  // fraction of along-rail crank speed that fattens the kick scar
+  JUMP_TANGENT_MAX: 5,  // px/frame clamp on that scar contribution
   JUMP_TANGENT_STICKY_FRAMES: 2,
   JUMP_CARRIER_INHERIT: 1,  // fraction of the host rail's own motion carried out
   JUMP_CARRIER_MAX: 9,  // px/frame clamp on carrier-imparted speed
@@ -3414,24 +3413,9 @@ function createClingSim(level){
     else { bx /= blen; by /= blen; }
 
     // +g/2 pads semi-implicit Euler so authored HEIGHT matches measured apex.
+    // Along-rail crank does not change apex (ramps used to add their along-up component).
     const v0 = Math.sqrt(2 * SIM.GRAVITY * SIM.JUMP_HEIGHT) + SIM.GRAVITY * 0.5;
     let vx = bx * v0, vy = by * v0;
-    const [tx, ty] = RL.tangentAt(rail, geomS);
-    // This-frame / sticky crank only — standing jump = pure up.
-    let ts = ball.crankDeltaS || 0;
-    if (Math.abs(ts) < 0.01) ts = ball.crankDeltaSSticky || 0;
-    ts *= SIM.JUMP_TANGENT_INHERIT;
-    if (ts > SIM.JUMP_TANGENT_MAX) ts = SIM.JUMP_TANGENT_MAX;
-    else if (ts < -SIM.JUMP_TANGENT_MAX) ts = -SIM.JUMP_TANGENT_MAX;
-    // Along-up only (ramp / vertical ride). Lateral discarded so a floor jump
-    // cannot inherit leftover crank into a left/right launch.
-    let t2x = tx * ts, t2y = ty * ts;
-    let along = t2x * upX + t2y * upY;
-    const upMax = SIM.JUMP_TANGENT_UP_MAX != null ? SIM.JUMP_TANGENT_UP_MAX : 2.57;
-    if (along > upMax) along = upMax;
-    else if (along < -upMax) along = -upMax;
-    t2x = upX * along; t2y = upY * along;
-    vx += t2x; vy += t2y;
 
     const owner = ownerOf(ball.rail);
     let [cvx, cvy] = carrierVelocityAt(owner, px, py);
