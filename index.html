@@ -1915,7 +1915,9 @@ function simGetRail(o){
         const a = rad(o.angle||0);
         cx += -Math.sin(a)*dep; cy += Math.cos(a)*dep;
       }
-      return makeBarOutlineRailS(cx, cy, o.length, o.angle, SIM.PLATE_WIDTH || 8);
+      const rail = makeBarOutlineRailS(cx, cy, o.length, o.angle, SIM.PLATE_WIDTH || 8);
+      rail.noCling = true; // weight sensor; Cling does not board the pad
+      return rail;
     }
     case "ballast": {
       const r = rad(o.slideAngle||0);
@@ -2002,6 +2004,9 @@ function createClingSim(level){
   }
   function isExteriorSolidRail(rail){
     return rail && (rail.kind === "bar_outline" || rail.kind === "peg");
+  }
+  function railAllowsCling(rail){
+    return !!rail && !rail.noCling;
   }
   /** Rolling-ball rule: clockwise crank rolls like a wheel gripping the surface.
    *  Exterior solids (bar_outline / peg) use exterior normal (center → contact).
@@ -2363,7 +2368,7 @@ function createClingSim(level){
   /** Shared cling attach (toggle / flight land / solid+blade scoop). */
   function boardRail(railIndex, landS, sign, push, lastDir, fromX, fromY, squashNx, squashNy){
     const nRail = game.rails[railIndex];
-    if (!nRail) return;
+    if (!railAllowsCling(nRail)) return;
     sign = sign || 0; push = push || 0;
     const oldPol = ball.crankPolarity || 1;
     ball.mode = "cling";
@@ -2391,6 +2396,7 @@ function createClingSim(level){
   function containedInSolid(skipIdx, px, py, r){
     for (let i = 1; i < game.rails.length; i++){
       if (i === skipIdx) continue;
+      if (!railAllowsCling(game.rails[i])) continue;
       if (RL.pointInSolid(game.rails[i], px, py, r)) return true;
     }
     return false;
@@ -2587,6 +2593,7 @@ function createClingSim(level){
       preX = p[0]; preY = p[1];
     }
     const nRail = game.rails[toRailIndex];
+    if (!railAllowsCling(nRail)) return;
     const ontoBlade = isOpenBladeRail(nRail, toRailIndex);
     const oldPol = ball.crankPolarity || 1;
     ball.rail = toRailIndex;
@@ -2707,7 +2714,7 @@ function createClingSim(level){
     for (let i = 1; i < game.rails.length; i++){
       if (i === ball.rail || isIgnored(i)) continue;
       const r = game.rails[i];
-      if (!isExteriorSolidRail(r)) continue;
+      if (!isExteriorSolidRail(r) || !railAllowsCling(r)) continue;
       const cp = RL.closestPoint(r, px, py);
       if (cp.d <= bestD){ bestD = cp.d; bestI = i; bestS = cp.s; }
     }
@@ -2877,7 +2884,7 @@ function createClingSim(level){
     for (let i=1;i<game.rails.length;i++){
       const r = game.rails[i];
       if (i === ball.rail || isIgnored(i)) continue;
-      if (r.kind === "bar_outline"){
+      if (r.kind === "bar_outline" && railAllowsCling(r)){
         for (const tipSign of [-1,1]){
           const cap = closestOnBarEndCap(r, tipSign, px, py);
           if (cap.d <= bestDist){
@@ -3053,6 +3060,7 @@ function createClingSim(level){
     let bestI = null, bestS = 0, bestD = snap, bestSpiked = false;
     for (let i=1;i<game.rails.length;i++){
       const r = game.rails[i];
+      if (!railAllowsCling(r)) continue;
       const cp = RL.closestPoint(r, ball.flightX, ball.flightY);
       if (cp.d < bestD){
         bestD = cp.d; bestI = i; bestS = cp.s;
@@ -3241,6 +3249,7 @@ function createClingSim(level){
     let bestI = null, bestS = 0, bestAlong = Infinity;
     for (let i=1;i<game.rails.length;i++){
       const r = game.rails[i];
+      if (!railAllowsCling(r)) continue;
       const segs = RL.segments(r);
       let accum = 0;
       for (let si=0; si<segs.length; si++){
@@ -3267,7 +3276,7 @@ function createClingSim(level){
   }
   function findBarUpFaceLanding(railIndex, minAlong){
     const r = game.rails[railIndex];
-    if (!r || r.kind !== "bar_outline") return null;
+    if (!r || r.kind !== "bar_outline" || !railAllowsCling(r)) return null;
     const [gx, gy] = gravityVec();
     const rx = gy, ry = -gx;
     const halfW = SIM.BALL_RADIUS;
@@ -3542,7 +3551,7 @@ function createClingSim(level){
     const vx = ball.flightVx || 0, vy = ball.flightVy || 0;
     let bestI = null, bestS = 0, bestD = snap, bestSpiked = false;
     for (let i = 1; i < game.rails.length; i++){
-      if (isIgnored(i)) continue;
+      if (isIgnored(i) || !railAllowsCling(game.rails[i])) continue;
       const r = game.rails[i];
       const cp = RL.closestPoint(r, ball.flightX, ball.flightY);
       if (cp.d < bestD){
@@ -3648,7 +3657,7 @@ function createClingSim(level){
     const r = SIM.BALL_RADIUS;
     for (let i = 1; i < game.rails.length; i++){
       const rail = game.rails[i];
-      if (isExteriorSolidRail(rail) && !isIgnored(i)
+      if (isExteriorSolidRail(rail) && railAllowsCling(rail) && !isIgnored(i)
           && RL.pointInSolid(rail, ball.flightX, ball.flightY, r)){
         if (ball.fromJump){
           if (resolveJumpSolidContainment(i)) return;
@@ -3673,7 +3682,7 @@ function createClingSim(level){
       }
       for (let i = 1; i < game.rails.length; i++){
         const rail = game.rails[i];
-        if (isExteriorSolidRail(rail) && !isIgnored(i)
+        if (isExteriorSolidRail(rail) && railAllowsCling(rail) && !isIgnored(i)
             && RL.pointInSolid(rail, ball.flightX, ball.flightY, r)){
           if (ball.fromJump && resolveJumpSolidContainment(i)) return true;
           if (!ball.fromJump && rail.kind === "peg" && clingToRailClosest(i)) return true;
@@ -3797,6 +3806,7 @@ function createClingSim(level){
     const arena = game.rails[1];
     const seals = [];
     for (let i = 2; i < game.rails.length; i++){
+      if (game.rails[i].noCling) continue;
       const found = RL.arenaEdgeSeals(game.rails[i], arena, L, T, R, B, gapTol, minFrac);
       for (const seal of found){
         seal.railIndex = i;
@@ -3894,9 +3904,7 @@ function createClingSim(level){
   function detectPlateWeightS(plate){
     const [fx1,fy1,fx2,fy2] = plateTopFaceSegmentS(plate);
     const pressDist = SIM.PLATE_PRESS_DIST || 6;
-    if (ball.mode === "cling"){
-      const ri = railIndexOf(plate);
-      if (ri && ball.rail === ri) return true;
+    if (ball.mode === "cling" || ball.mode === "flight" || ball.mode === "falling"){
       const [bx,by] = worldPos();
       if (distPointToSegmentS(bx,by,fx1,fy1,fx2,fy2) <= pressDist) return true;
     }
@@ -4219,6 +4227,7 @@ function createClingSim(level){
   function projectSpawnOntoRails(spawn){
     let bestRail = 1, bestS = 0, bestD = Infinity;
     for (let i=1;i<game.rails.length;i++){
+      if (!railAllowsCling(game.rails[i])) continue;
       const cp = RL.closestPoint(game.rails[i], spawn.x, spawn.y);
       if (cp.d < bestD){ bestD = cp.d; bestRail = i; bestS = cp.s; }
     }
@@ -4233,6 +4242,9 @@ function createClingSim(level){
     stepPressurePlates();
     stepAutoMovers();
     buildRails();
+    if (ball.mode === "cling" && game.rails[ball.rail] && game.rails[ball.rail].noCling){
+      beginFallFromCling();
+    }
     refreshOpenRailPolarity();
     for (const obj of objects){
       if (obj.type === "moving_wall"
