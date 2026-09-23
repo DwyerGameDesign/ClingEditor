@@ -337,7 +337,7 @@ const SLIDE_TYPES = new Set(["sliding_wall","moving_wall","moving_hazard","slidi
 const SOLID_CRAWLER_HOSTS = new Set(["wall","moving_wall","toggle_wall","sliding_wall"]);
 // Dpad-selectable crank targets only. Launchers dock on contact (not selectable).
 const CRANKABLE = new Set(["deflector","sliding_wall","sliding_hazard"]);
-const ANGLED = new Set(["wall","deflector","sweeper","toggle_wall","sliding_wall","moving_wall","launcher"]);
+const ANGLED = new Set(["wall","deflector","sweeper","toggle_wall","sliding_wall","moving_wall","launcher","pressure_plate"]);
 
 function normalizeBorderMode(mode){
   if (mode === "full" || mode === "open" || mode === "spikes") return mode;
@@ -4055,8 +4055,18 @@ function createClingSim(level){
     if (members){
       for (const obj of members){
         if (obj.type === "deflector"){
+          // Same ease as entities.stepDeflectorWaterLevel (DEFLECTOR_FOLLOW).
           const base = (obj._cfg && obj._cfg.angle) || 0;
-          applyDeflectorTargetAngle(obj, mod(base + rollDeg, 360));
+          const target = mod(base + rollDeg, 360);
+          let exact = obj._angleExact;
+          if (exact == null) exact = obj.angle || 0;
+          const err = shortestDeg(exact, target);
+          const stop = 0.15;
+          if (Math.abs(err) <= stop) continue;
+          let step = err * 0.4;
+          if (Math.abs(step) < stop) step = err;
+          obj._angleExact = mod(exact + step, 360);
+          applyDeflectorTargetAngle(obj, obj._angleExact);
         } else if (obj.type === "sliding_wall" || obj.type === "sliding_hazard"){
           const target = stepSliderGravity(obj, rollDeg);
           if (target != null) applySliderTargetPosition(obj, target);
@@ -4184,7 +4194,10 @@ function createClingSim(level){
         obj.objectPosition = obj.restPosition;
       }
       if (obj._cfg){
-        if (obj.type === "deflector" && obj._cfg.angle != null) obj.angle = obj._cfg.angle;
+        if (obj.type === "deflector" && obj._cfg.angle != null){
+          obj.angle = obj._cfg.angle;
+          obj._angleExact = obj._cfg.angle;
+        }
         if ((obj.type === "sliding_wall" || obj.type === "sliding_hazard" || obj.type === "ballast")
             && obj._cfg.objectPosition != null){
           obj.objectPosition = obj._cfg.objectPosition;
@@ -4564,10 +4577,11 @@ function drawSlideRailFor(o){
   }
 }
 function gravityBobVec(){
-  // Same as main.lua's gravityBob: roll 0 hangs screen-down, and it turns
-  // with the slider instead of snapping to gravityVec's four quadrants.
+  // Same as main.lua's gravityBob. Signed roll steers blades and sliders;
+  // the plumb turns the other way. roll 0 hangs screen-down. CSS rotate
+  // (+viewRollDeg) then puts that hang at the bottom of the window.
   const r = rad(viewRollDeg || 0);
-  return [-Math.sin(r), Math.cos(r)];
+  return [Math.sin(r), Math.cos(r)];
 }
 function drawLinkBadgeAtS(cx, cy, linkId){
   const n = Number(linkId);
@@ -6204,10 +6218,10 @@ function canvasScreenPos(e){
   const dy = e.clientY - cy;
   const a = rad(viewRollDeg);
   const c = Math.cos(a), s = Math.sin(a);
-  // Inverse of rotate(-viewRollDeg) scale(viewScale): un-rotate, then unscale.
-  // At scale 1 this is the same 800×480 mapping as before.
-  const rx = (dx * c - dy * s) / viewScale;
-  const ry = (dx * s + dy * c) / viewScale;
+  // Inverse of rotate(+viewRollDeg) scale(viewScale): un-rotate, then unscale.
+  // Positive roll is clockwise (right side down), matching the plumb.
+  const rx = (dx * c + dy * s) / viewScale;
+  const ry = (-dx * s + dy * c) / viewScale;
   return [(rx + 400) / 2, (ry + 240) / 2];
 }
 const snapV = (v, fine)=> Math.round(v / (fine?1:5)) * (fine?1:5);
@@ -6484,7 +6498,8 @@ function applyViewRotate(){
   holder.style.width = Math.max(1, Math.floor(bw * scale)) + "px";
   holder.style.height = Math.max(1, Math.floor(bh * scale)) + "px";
   // Scale first, then rotate (CSS applies right to left).
-  wrap.style.transform = "rotate(" + (-viewRollDeg) + "deg) scale(" + scale + ")";
+  // Positive roll is clockwise: right side down, plumb toward that side.
+  wrap.style.transform = "rotate(" + viewRollDeg + "deg) scale(" + scale + ")";
   const label = el("tiltDeg");
   if (label) label.textContent = Math.round(viewRollDeg) + "\u00b0";
   const slider = el("tiltSlider");
