@@ -111,12 +111,8 @@
     display:flex; flex-direction:column; min-height:0;
   }
   aside section{padding:8px 10px; border-bottom:1px solid var(--line); overflow-y:auto}
-  #warnPanel{max-height:130px; flex:0 0 auto}
-  #propsPanel{flex:0 0 auto; max-height:44%}
+  #propsPanel{flex:0 0 auto; max-height:52%}
   #listPanel{flex:1 1 auto; min-height:80px}
-  .warn-item{padding:3px 6px; margin:2px 0; border-left:3px solid var(--warn); background:#f6ecd6; color:#5c3d00}
-  .warn-item.err{border-left-color:var(--err); background:#f7dcdc; color:#7a1010}
-  .warn-item.ok{border-left-color:var(--ok); background:#e2efe2; color:#1d4b1f}
   /* properties */
   .prop-row{display:flex; align-items:center; gap:6px; margin:4px 0}
   .prop-row label{width:92px; color:#444; flex:0 0 auto}
@@ -230,7 +226,6 @@
   </div>
 
   <aside>
-    <section id="warnPanel"><h3>Checks</h3><div id="warnList"></div></section>
     <section id="propsPanel"><h3>Properties</h3><div id="props"><div class="muted">Select an object.</div></div></section>
     <section id="listPanel"><h3>Objects <span class="muted" id="objCount"></span></h3><ul id="objList"></ul></section>
   </aside>
@@ -1397,7 +1392,8 @@ function stepSliderGravity(obj, rollDeg){
   const maxSpeed = SIM.ACCEL_SLIDER_MAX_SPEED ?? CFG.ACCEL_SLIDER_MAX_SPEED ?? 8;
   let curComp = sliderRailGravity(obj.slideAngle, rollDeg);
   if (Math.abs(curComp) < deadzone) curComp = 0;
-  const pos = obj.objectPosition || 0.5;
+  // 0 is a real end of the rail. || would read it as the midpoint and loop the fall.
+  const pos = obj.objectPosition ?? 0.5;
   const gAccel = curComp * g;
   if ((pos <= 0 && gAccel <= 0) || (pos >= 1 && gAccel >= 0)){
     obj._slideVel = 0;
@@ -3860,7 +3856,9 @@ function createClingSim(level){
       } else if (obj.type === "crawler"){
         if (obj.dead) continue;
         const host = obj.host;
-        if (!host){ obj.dead = true; continue; }
+        // No host yet: stay at the authored seat. Only a host that lost its
+        // outline (rail gone) despawns. Matches Crawler:step.
+        if (!host) continue;
         const ri = railIndexOf(host);
         if (!ri){ obj.dead = true; continue; }
         const hostRail = game.rails[ri];
@@ -4026,8 +4024,11 @@ function createClingSim(level){
         const cp = RL.closestPoint(game.rails[i], obj.x, obj.y);
         if (cp.d < bestD){ bestD = cp.d; bestOwner = owner; bestS = cp.s; }
       }
+      // Game load asserts a host. The editor still has to open Test so the
+      // rest of the level can be played; an unbound crawler stays at its seat.
       if (!bestOwner){
-        throw new Error("Cling: crawler requires a SOLID outline host (wall/moving_wall/toggle_wall/sliding_wall)");
+        obj.host = null;
+        continue;
       }
       obj.host = bestOwner;
       const ri = railIndexOf(bestOwner);
@@ -4060,7 +4061,7 @@ function createClingSim(level){
     if (obj.plateDriven) return false;
     if (targetPos < 0) targetPos = 0;
     else if (targetPos > 1) targetPos = 1;
-    const prev = obj.objectPosition || 0.5;
+    const prev = obj.objectPosition ?? 0.5;
     if (Math.abs(targetPos - prev) < 0.001) return false;
     let prevCx = 0, prevCy = 0;
     if (obj.type === "sliding_wall") [prevCx, prevCy] = simSlideCenter(obj);
@@ -4561,9 +4562,11 @@ function drawHazardBody(cx,cy,r,fc){
   ctx.strokeStyle = INK; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.arc(cx,cy,5,0,7); ctx.stroke();
 }
-/** Half-extent of the body along the slide axis (visual rail only; mirrors main.lua). */
+/** Half-extent of the body along the slide axis (visual rail only; mirrors entities.lua).
+ *  sliding_hazard endstops sit on the center's travel limits. */
 function slideVisualExtent(o){
-  if (o.type === "moving_hazard" || o.type === "sliding_hazard" || o.type === "ballast")
+  if (o.type === "sliding_hazard") return 0;
+  if (o.type === "moving_hazard" || o.type === "ballast")
     return o.radius || CFG.HAZARD_RADIUS_DEFAULT;
   if (o.type === "sliding_wall" || o.type === "moving_wall"){
     const halfW = (o.type === "sliding_wall" ? CFG.BAR_WIDTH : CFG.WALL_WIDTH) / 2;
@@ -4749,28 +4752,28 @@ function drawSpawn(o){
   const [cx,cy] = toScreen(o.x,o.y);
   drawSpawnAtS(cx,cy);
 }
-/** Exit doorway. `unlocked` false = locked hatch (key-gated). */
+/** Exit. 30px square (matches CLING_FX_EXIT_HALF_*). `unlocked` false = locked hatch. */
 function drawExitAtS(cx,cy,unlocked=true){
   const pulseSpeed = unlocked ? 0.15 : 0.08;
   const pulseAmp = unlocked ? 1.5 : 0.6;
   const pulse = Math.sin(frame*pulseSpeed)*pulseAmp;
-  const half = 8 + pulse;
-  const left = cx - half, top = cy - half - 2, w = half * 2, h = half * 2 + 4;
+  const half = 15 + pulse;
+  const left = cx - half, top = cy - half, side = half * 2;
   ctx.strokeStyle = INK; ctx.lineWidth = 2;
-  ctx.strokeRect(left, top, w, h);
+  ctx.strokeRect(left, top, side, side);
   ctx.lineWidth = 1;
   if (unlocked){
-    ctx.beginPath(); ctx.moveTo(cx,cy-half+2); ctx.lineTo(cx,cy+half); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, top+2); ctx.lineTo(cx, top+side-2); ctx.stroke();
     ctx.fillStyle = INK;
     ctx.beginPath(); ctx.arc(cx+half-3, cy, 1.5, 0, 7); ctx.fill();
   } else {
     // Locked: crosshatch + closed seam + deadbolt (mirrors Exit:draw).
     ctx.strokeStyle = dither(0.85);
-    for (let yy = top + 2; yy < top + h - 2; yy += 3){
-      ctx.beginPath(); ctx.moveTo(left+2, yy); ctx.lineTo(left+w-2, yy+2); ctx.stroke();
+    for (let yy = top + 2; yy < top + side - 2; yy += 3){
+      ctx.beginPath(); ctx.moveTo(left+2, yy); ctx.lineTo(left+side-2, yy+2); ctx.stroke();
     }
     ctx.strokeStyle = INK;
-    ctx.beginPath(); ctx.moveTo(cx, top+2); ctx.lineTo(cx, top+h-2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx, top+2); ctx.lineTo(cx, top+side-2); ctx.stroke();
     ctx.fillStyle = INK;
     ctx.beginPath(); ctx.arc(cx+half-3, cy, 1.5, 0, 7); ctx.fill();
   }
@@ -5317,12 +5320,20 @@ function startTest(){
   stopPlay();           // also stops any previous test
   setArmed(null);
   selIdx = -1; refreshSel();
-  testSim = createClingSim(deepCopy(level));
+  try {
+    testSim = createClingSim(deepCopy(level));
+  } catch (err) {
+    testSim = null;
+    el("stMode").textContent = err && err.message ? err.message : String(err);
+    return;
+  }
   testing = true;
   wheelAccum = 0; testKeys.clear();
   el("btnTest").innerHTML = "&#9632; Stop test";
   el("btnTest").classList.add("active");
-  el("stMode").innerHTML = "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>tilt</b> gravity &nbsp;<b>&#8593;</b> CLING/FIRE &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit";
+  const unbound = testSim.objects.some(o => o.type === "crawler" && !o.host);
+  el("stMode").innerHTML = "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>tilt</b> gravity &nbsp;<b>&#8593;</b> CLING/FIRE &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit"
+    + (unbound ? " &nbsp;· crawler has no solid host (wall / moving wall / toggle wall / sliding wall) — it stays put" : "");
   cv.style.cursor = "default";
   cv.focus && cv.focus();
 }
@@ -5655,7 +5666,7 @@ function hitTest(sx,sy){
     const [cx,cy] = bodyCenterScreen(o,i);
     let hit = false;
     if (o.type==="spawn") hit = Math.hypot(sx-cx,sy-cy) <= 10;
-    else if (o.type==="exit") hit = Math.abs(sx-cx)<=11 && Math.abs(sy-cy)<=13;
+    else if (o.type==="exit") hit = Math.abs(sx-cx)<=15 && Math.abs(sy-cy)<=15;
     else if (o.type==="key" || o.type==="coin") hit = Math.hypot(sx-cx,sy-cy) <= 8;
     else if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard"||o.type==="crawler"||o.type==="ballast")
       hit = Math.hypot(sx-cx,sy-cy) <= Math.max(8, o.radius||(o.type==="crawler"?CFG.CRAWLER_RADIUS_DEFAULT:(o.type==="ballast"?(CFG.BALLAST_RADIUS||8):CFG.HAZARD_RADIUS_DEFAULT)));
@@ -5860,20 +5871,6 @@ function validate(){
   });
   return {errs, warns, infos};
 }
-function renderWarnings(){
-  const {errs, warns, infos} = validate();
-  const box = el("warnList");
-  box.innerHTML = "";
-  if (!errs.length && !warns.length && !(infos && infos.length)){
-    box.innerHTML = '<div class="warn-item ok">All checks pass.</div>';
-    return;
-  }
-  for (const e of errs){ const d=document.createElement("div"); d.className="warn-item err"; d.textContent=e; box.appendChild(d); }
-  for (const w of warns){ const d=document.createElement("div"); d.className="warn-item"; d.textContent=w; box.appendChild(d); }
-  for (const info of (infos || [])){
-    const d=document.createElement("div"); d.className="warn-item ok"; d.textContent=info; box.appendChild(d);
-  }
-}
 
 /* ---------- properties panel ---------- */
 function el(id){ return document.getElementById(id); }
@@ -5963,7 +5960,7 @@ function renderProps(){
       const setPos = v=>{
         v = Math.max(0,Math.min(1, isFinite(v)?v:0));
         if (posUndoArmed){ stopPlay(); pushUndo(); posUndoArmed=false; setTimeout(()=>posUndoArmed=true, 800); }
-        o.startPosition = v; rng.value=v; num.value=v; saveLocal(); renderWarnings(); renderList();
+        o.startPosition = v; rng.value=v; num.value=v; saveLocal(); renderList();
       };
       rng.addEventListener("input", ()=>setPos(parseFloat(rng.value)));
       num.addEventListener("change", ()=>setPos(parseFloat(num.value)));
@@ -6122,7 +6119,7 @@ function renderProps(){
     const setPos = v=>{
       v = Math.max(0,Math.min(1, isFinite(v)?v:0.5));
       if (posUndoArmed){ stopPlay(); pushUndo(); posUndoArmed=false; setTimeout(()=>posUndoArmed=true, 800); }
-      o.objectPosition = v; rng.value=v; num.value=v; saveLocal(); renderWarnings(); renderList();
+      o.objectPosition = v; rng.value=v; num.value=v; saveLocal(); renderList();
     };
     rng.addEventListener("input", ()=>setPos(parseFloat(rng.value)));
     num.addEventListener("change", ()=>setPos(parseFloat(num.value)));
@@ -6248,7 +6245,7 @@ function renderList(){
 
 /* ---------- selection helpers ---------- */
 function refreshSel(){ renderProps(); renderList(); }
-function refreshAll(){ renderProps(); renderList(); renderWarnings(); }
+function refreshAll(){ renderProps(); renderList(); }
 function duplicateSel(){
   if (selIdx<0) return;
   setReplaceMode(false);
@@ -6365,7 +6362,6 @@ window.addEventListener("mousemove", e=>{
     o.slideAngle = snapA(a, e.shiftKey);
     renderPropsSoft();
   }
-  renderWarnings();
 });
 window.addEventListener("mouseup", ()=>{
   if (drag && drag.moved) saveLocal();
