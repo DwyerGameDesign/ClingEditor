@@ -200,7 +200,7 @@
     <button class="pal-btn" data-type="ballast"><span class="g">&#9679;</span>ballast</button>
     <button class="pal-btn" data-type="crawler"><span class="g">&#10042;</span>crawler</button>
     <button class="pal-btn" data-type="launcher"><span class="g">&#10148;</span>launcher</button>
-    <button class="pal-btn" data-type="sign"><span class="g">&#8505;</span>sign</button>
+    <button class="pal-btn" data-type="text"><span class="g">&#8505;</span>text</button>
     <div class="hint" style="margin-top:8px">Click a tool, then click the arena. Select an object for Duplicate / Delete / Replace (pick a type from the palette).<br><br><kbd>Esc</kbd> cancel / deselect<br><kbd>&#8679;</kbd> fine snap<br><kbd>&#8963;/&#8984;Z</kbd> undo<br><kbd>&#8963;/&#8984;&#8679;Z</kbd> redo<br><kbd>&#8963;/&#8984;D</kbd> duplicate<br><kbd>&#9003;</kbd> delete<br>arrows nudge 5 (&#8679;=1)</div>
   </nav>
 
@@ -459,7 +459,7 @@ function newObject(type, x, y){
       o.radius = CFG.CRAWLER_RADIUS_DEFAULT; o.direction = 1;
       o.startPosition = 0; o.speed = "M"; break;
     case "launcher": o.angle = 0; break;
-    case "sign": o.text = "Hint text"; o.textPos = "bottom"; break;
+    case "text": o.text = "Hint text"; o.align = "center"; break;
   }
   return o;
 }
@@ -540,7 +540,7 @@ const EXPORT_SPEC = {
   pressure_plate:{l1:["x","y","length","angle"], l2:["link","mode","holdFrames"]},
   ballast:      {l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition"]},
   crawler:      {l1:["x","y","radius"], l2:["direction","startPosition","speed"]},
-  sign:         {l1:["x","y"], l2:["text","textPos"]},
+  text:         {l1:["x","y"], l2:["text","align","angle","near","far"]},
 };
 function fmtParam(key, val){
   if (key === "objectPosition" || key === "startPosition") return key + " = " + fmtPos01(val);
@@ -742,7 +742,7 @@ const KNOWN_KEYS = {
   ballast:["x","y","radius","slideAngle","slideRange","objectPosition"],
   pressure_plate:["x","y","length","angle","link","mode","holdFrames"],
   crawler:["x","y","radius","direction","startPosition","speed"],
-  sign:["x","y","text","textPos"],
+  text:["x","y","text","align","near","far","angle"],
 };
 
 
@@ -772,7 +772,7 @@ const LEVEL_CODEC = {
   ballast:["x","y","radius","slideAngle","slideRange","objectPosition"],
   pressure_plate:["x","y","length","angle","link","mode","holdFrames"],
   crawler:["x","y","radius","direction","startPosition","speed"],
-  sign:["x","y","text","textPos"],
+  text:["x","y","text","align","near","far","angle"],
 },
   TYPE_TO_CODE: {
   spawn:"sp",
@@ -792,7 +792,7 @@ const LEVEL_CODEC = {
   ballast:"ba",
   pressure_plate:"pp",
   crawler:"cr",
-  sign:"sg",
+  text:"sg",
 },
   CODE_TO_TYPE: {
   "sp":"spawn",
@@ -812,7 +812,7 @@ const LEVEL_CODEC = {
   "ba":"ballast",
   "pp":"pressure_plate",
   "cr":"crawler",
-  "sg":"sign",
+  "sg":"text",
 },
   DEFAULTS: {
   hazard:{radius:15},
@@ -829,12 +829,12 @@ const LEVEL_CODEC = {
   ballast:{radius:8,slideAngle:0,slideRange:60,objectPosition:0.5},
   pressure_plate:{length:40,angle:0,link:1,mode:"hold",holdFrames:60},
   crawler:{radius:10,direction:1,startPosition:0,speed:"M"},
-  sign:{text:"Hint text",textPos:"bottom"},
+  text:{text:"Hint text",angle:0},
 },
-  NUMERIC_KEYS: new Set(["angle","angleStep","direction","holdFrames","length","link","maxAngle","maxOpen","maxSlide","minAngle","minSlide","objectPosition","plateId","pressedPosition","radius","slideAngle","slideOffset","slidePosition","startPosition","width","x","y"]),
+  NUMERIC_KEYS: new Set(["angle","angleStep","direction","far","holdFrames","length","link","maxAngle","maxOpen","maxSlide","minAngle","minSlide","near","objectPosition","plateId","pressedPosition","radius","slideAngle","slideOffset","slidePosition","startPosition","width","x","y"]),
   POS01_KEYS: new Set(["objectPosition","startPosition"]),
   LETTER_OR_NUMBER_KEYS: new Set(["slideRange","speed"]),
-  STRING_KEYS: new Set(["group","mode","text","textPos"]),
+  STRING_KEYS: new Set(["align","group","mode","text"]),
   BORDER_ORDER: ["top","bottom","left","right"],
   BORDER_TO_CHAR: {full:"f",spikes:"s",open:"o"},
   CHAR_TO_BORDER: {f:"full",s:"spikes",o:"open"},
@@ -1350,7 +1350,8 @@ function updateDpadQuadrant(rollDeg){
   if (rollDeg == null) return;
   const margin = CFG.ACCEL_DPAD_QUADRANT_HYSTERESIS ?? 12;
   const threshold = 45 + margin;
-  let dev = rollDeg - viewDpadSteps * 90;
+  // Plumb, opposite the steering roll. 90° and 270° then mirror; 0°/180° stay.
+  let dev = -rollDeg - viewDpadSteps * 90;
   while (dev > 180) dev -= 360;
   while (dev < -180) dev += 360;
   while (dev > threshold){ viewDpadSteps += 1; dev -= 90; }
@@ -1382,7 +1383,8 @@ function toGravitySpace(x, y, gx, gy){
 }
 function sliderRailGravity(slideAngle, rollDeg){
   if (rollDeg == null) return 0;
-  return Math.cos(rad(90 + rollDeg - (slideAngle || 0)));
+  // Plumb is opposite the steering roll (see entities.sliderRailGravity).
+  return Math.cos(rad(90 - rollDeg - (slideAngle || 0)));
 }
 const SLIDE_VEL_STOP = 0.05;
 function stepSliderGravity(obj, rollDeg){
@@ -4079,7 +4081,7 @@ function createClingSim(level){
         if (obj.type === "deflector"){
           // Same ease as entities.stepDeflectorWaterLevel (DEFLECTOR_FOLLOW).
           const base = (obj._cfg && obj._cfg.angle) || 0;
-          const target = mod(base + rollDeg, 360);
+          const target = mod(base - rollDeg, 360);
           let exact = obj._angleExact;
           if (exact == null) exact = obj.angle || 0;
           const err = shortestDeg(exact, target);
@@ -4393,7 +4395,7 @@ const INK = "#111";
 /* ---------- effective (play-aware) values ---------- */
 function tiltPreviewAngle(o){
   if (!followsTilt(o) || o.type !== "deflector") return null;
-  return mod((o.angle || 0) + viewRollDeg, 360);
+  return mod((o.angle || 0) - viewRollDeg, 360);
 }
 function effAngle(o,i){
   if (playing && runtime && runtime[i] && runtime[i].angle !== undefined) return runtime[i].angle;
@@ -4778,28 +4780,63 @@ function drawExit(o){
   // Editor canvas: show open look (authoring). Test mode passes unlocked explicitly.
   drawExitAtS(cx,cy,true);
 }
-function drawSignAtS(cx,cy,selected){
-  const panelW = 12, panelH = 9;
-  const panelLeft = cx - panelW/2;
-  const panelTop = cy - panelH - 3;
-  const postTop = cy - 3;
-  const bob = Math.sin(frame*0.08) >= 0 ? 1 : -1;
-  const bangY = panelTop + 2 + bob;
-  if (selected) dashedCircle(cx, cy, 18);
-  ctx.strokeStyle = INK; ctx.lineWidth = 1;
-  ctx.fillStyle = dither(0.5);
-  ctx.beginPath(); ctx.moveTo(cx, postTop); ctx.lineTo(cx, cy); ctx.stroke();
+function drawTextPanelAtS(cx, cy, o, selected){
+  const label = (o && o.text) || "";
+  ctx.font = "12px monospace";
+  const tw = Math.max(8, ctx.measureText(label).width);
+  const pad = 5;
+  const w = tw + pad * 2;
+  const h = 12 + pad * 2;
+  const align = o && o.align;
+  let left = -w / 2;
+  if (align === "left") left = 0;
+  else if (align === "right") left = -w;
+  const top = -h / 2;
+  const pcx = cx + left + w / 2;
+  const pcy = cy + top + h / 2;
+  const ang = ((o && o.angle) || 0) * Math.PI / 180;
+  if (selected) dashedCircle(pcx, pcy, Math.max(18, w / 2));
+  ctx.save();
+  ctx.translate(pcx, pcy);
+  ctx.rotate(ang);
   ctx.fillStyle = "#fff";
-  ctx.fillRect(panelLeft, panelTop, panelW, panelH);
+  ctx.fillRect(-w / 2, -h / 2, w, h);
   ctx.strokeStyle = INK;
-  ctx.strokeRect(panelLeft, panelTop, panelW, panelH);
-  ctx.beginPath(); ctx.moveTo(cx, bangY); ctx.lineTo(cx, bangY + 3); ctx.stroke();
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  const amp = 2, wave = 8;
+  function wavySide(x0,y0,x1,y1){
+    const dx = x1-x0, dy = y1-y0;
+    const len = Math.hypot(dx, dy) || 1;
+    const nx = dy/len, ny = -dx/len;
+    let humps = Math.round(len / (wave * 0.5));
+    if (humps < 2) humps = 2;
+    if (humps % 2) humps += 1;
+    const steps = humps * 2;
+    for (let i = 0; i <= steps; i++){
+      const t = i / steps;
+      const bow = Math.sin(t * humps * Math.PI) * amp;
+      const px = x0 + dx * t + nx * bow;
+      const py = y0 + dy * t + ny * bow;
+      if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+    }
+  }
+  wavySide(-w/2, -h/2, w/2, -h/2);
+  wavySide(w/2, -h/2, w/2, h/2);
+  wavySide(w/2, h/2, -w/2, h/2);
+  wavySide(-w/2, h/2, -w/2, -h/2);
+  ctx.stroke();
   ctx.fillStyle = INK;
-  ctx.beginPath(); ctx.arc(cx, bangY + 5, 0.6, 0, 7); ctx.fill();
+  ctx.textBaseline = "top";
+  ctx.fillText(label, -w / 2 + pad, -h / 2 + pad);
+  ctx.restore();
 }
-function drawSign(o,selected){
-  const [cx,cy] = toScreen(o.x,o.y);
-  drawSignAtS(cx,cy,selected);
+function drawTextPanel(o, selected){
+  const [cx,cy] = toScreen(o.x, o.y);
+  drawTextPanelAtS(cx, cy, o, selected);
+}
+function drawText(o, selected){
+  drawTextPanel(o, selected);
 }
 function drawSpikeStrip(ax, ay, bx, by, inwardX, inwardY, fc){
   const r = CFG.SPIKE_HAZARD_R, gap = CFG.SPIKE_HAZARD_GAP;
@@ -4941,7 +4978,7 @@ function drawObject(o,i){
       break;
     }
     case "launcher": drawLauncher(o,i,selected); break;
-    case "sign": drawSign(o,selected); break;
+    case "text": drawText(o,selected); break;
   }
 }
 
@@ -5504,7 +5541,7 @@ function drawSim(sim){
       }
       case "pressure_plate": drawPressurePlateAtS(obj); break;
       case "launcher": drawLauncherAtS(obj.x, obj.y, obj.angle, isSelected); break;
-      case "sign": drawSignAtS(obj.x, obj.y, isSelected); break;
+      case "text": drawTextPanelAtS(obj.x, obj.y, obj, isSelected); break;
     }
   }
 
@@ -5625,7 +5662,7 @@ function hitTest(sx,sy){
     else if (o.type==="peg")
       hit = Math.hypot(sx-cx,sy-cy) <= pegRadiusOf(o) + 2;
     else if (o.type==="launcher") hit = Math.hypot(sx-cx,sy-cy) <= 16;
-    else if (o.type==="sign") hit = Math.hypot(sx-cx,sy-cy) <= 12;
+    else if (o.type==="text") hit = Math.hypot(sx-cx,sy-cy) <= 28;
     else if (BAR_TYPES.has(o.type)){
       const [x1,y1,x2,y2] = barEndpointsScreen(cx,cy,o.length,effAngle(o,i));
       let hw;
@@ -5775,14 +5812,14 @@ function validate(){
     if (!plateLinks[pid]) warns.push(`plateId ${pid} has no matching pressure_plate link.`);
   }
 
-  const signs = objs.filter(o => o.type === "sign");
-  if (signs.length > LEVEL_CODEC.MAX_SIGNS){
-    errs.push(`${signs.length} signs exceeds max ${LEVEL_CODEC.MAX_SIGNS}.`);
+  const texts = objs.filter(o => o.type === "text");
+  if (texts.length > LEVEL_CODEC.MAX_SIGNS){
+    errs.push(`${texts.length} texts exceeds max ${LEVEL_CODEC.MAX_SIGNS}.`);
   }
-  signs.forEach((o, k) => {
+  texts.forEach((o, k) => {
     const t = String(o.text || "");
     if (t.length > LEVEL_CODEC.MAX_SIGN_TEXT){
-      errs.push(`Sign ${k + 1} text is ${t.length} chars (max ${LEVEL_CODEC.MAX_SIGN_TEXT}).`);
+      errs.push(`Text ${k + 1} is ${t.length} chars (max ${LEVEL_CODEC.MAX_SIGN_TEXT}).`);
     }
   });
   if (objs.length > LEVEL_CODEC.MAX_OBJECTS){
@@ -6120,7 +6157,7 @@ function renderProps(){
     hint.textContent = unitHint;
     box.appendChild(hint);
   }
-  if (t === "sign"){
+  if (t === "text"){
     const row = document.createElement("div"); row.className="prop-row";
     const lab = document.createElement("label"); lab.textContent="text";
     const inp = document.createElement("input"); inp.type="text"; inp.value = o.text || "";
@@ -6132,17 +6169,29 @@ function renderProps(){
     box.appendChild(row);
     {
       const row2 = document.createElement("div"); row2.className="prop-row";
-      const lab2 = document.createElement("label"); lab2.textContent="textPos";
-      const cur = o.textPos || "auto";
-      row2.append(lab2, segControl(["bottom","top","auto"], cur, (P)=>{
+      const lab2 = document.createElement("label"); lab2.textContent="align";
+      const cur = o.align || "center";
+      row2.append(lab2, segControl(["center","left","right"], cur, (P)=>{
         stopPlay(); pushUndo();
-        o.textPos = (P === "auto") ? undefined : P;
+        o.align = P;
         commit(); renderProps();
       }));
       box.appendChild(row2);
     }
+    {
+      const rowA = document.createElement("div"); rowA.className="prop-row";
+      const labA = document.createElement("label"); labA.textContent="angle";
+      const curA = (o.angle == null) ? 0 : o.angle;
+      const shown = String(((curA % 360) + 360) % 360);
+      rowA.append(labA, segControl(["0","90","180","270"], shown, (P)=>{
+        stopPlay(); pushUndo();
+        o.angle = Number(P);
+        commit(); renderProps();
+      }));
+      box.appendChild(rowA);
+    }
     const hint = document.createElement("div"); hint.className="hint";
-    hint.textContent = "Proximity hint panel. Level tutorial text is HUD copy, not a sign.";
+    hint.textContent = "0 upright, 90 sideways, 180 upside down. Clockwise, same as walls.";
     box.appendChild(hint);
   }
   if (o._extra){
@@ -6305,7 +6354,7 @@ window.addEventListener("mousemove", e=>{
     if (o.type === "launcher"){
       o.angle = snapA(launcherScreenAngle(a), e.shiftKey);
     } else if (followsTilt(o) && o.type === "deflector"){
-      o.angle = snapA(a - viewRollDeg, e.shiftKey);
+      o.angle = snapA(a + viewRollDeg, e.shiftKey);
     } else {
       o.angle = snapA(a, e.shiftKey);
     }
