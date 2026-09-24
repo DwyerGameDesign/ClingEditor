@@ -329,7 +329,7 @@ function launcherScreenAngle(authored){
 
 const BAR_TYPES = new Set(["wall","deflector","sweeper","toggle_wall","sliding_wall","moving_wall","pressure_plate"]);
 const SLIDE_TYPES = new Set(["sliding_wall","moving_wall","moving_hazard","sliding_hazard","ballast"]);
-const SOLID_CRAWLER_HOSTS = new Set(["wall","moving_wall","toggle_wall","sliding_wall"]);
+const SOLID_CRAWLER_HOSTS = new Set(["wall","moving_wall","toggle_wall","sliding_wall","peg","deflector","sweeper"]);
 // Dpad-selectable crank targets only. Launchers dock on contact (not selectable).
 const CRANKABLE = new Set(["deflector","sliding_wall","sliding_hazard"]);
 const ANGLED = new Set(["wall","deflector","sweeper","toggle_wall","sliding_wall","moving_wall","launcher","pressure_plate"]);
@@ -1938,6 +1938,22 @@ function crawlerAdvanceS(s, direction, speed, length){
   if (!length || length <= 0) return s || 0;
   s = (s || 0) + (direction || 1) * (speed || 0);
   return mod(s, length);
+}
+/** Open blade: travel to an end and reverse. Returns [s, direction]. */
+function crawlerAdvanceOpen(s, direction, speed, length){
+  if (!length || length <= 0) return [s || 0, direction || 1];
+  direction = direction || 1;
+  s = (s || 0) + direction * (speed || 0);
+  if (s >= length){
+    s = length - (s - length);
+    direction = -1;
+    if (s < 0) s = 0;
+  } else if (s < 0){
+    s = -s;
+    direction = 1;
+    if (s > length) s = length;
+  }
+  return [s, direction];
 }
 function simGetMouthPos(o){
   const a = rad(o.angle||0);
@@ -3769,14 +3785,16 @@ function createClingSim(level){
     if (!hostRail) return true;
     if (ball.mode === "cling" && ball.rail === ri){
       const sampleS = RL.closestPoint(hostRail, px, py).s;
-      return closedArcDist(sampleS, obj.s || 0, RL.length(hostRail)) < hitR;
+      const len = RL.length(hostRail);
+      const along = hostRail.closed
+        ? closedArcDist(sampleS, obj.s || 0, len)
+        : Math.abs(sampleS - (obj.s || 0));
+      return along < hitR;
     }
-    if (hostRail.kind === "bar_outline"){
-      for (let t = 1; t <= 3; t++){
-        const f = t * 0.25;
-        const sx = px + (cx - px) * f, sy = py + (cy - py) * f;
-        if (RL.pointInBar(hostRail, sx, sy, 0)) return false;
-      }
+    for (let t = 1; t <= 3; t++){
+      const f = t * 0.25;
+      const sx = px + (cx - px) * f, sy = py + (cy - py) * f;
+      if (RL.pointInSolid(hostRail, sx, sy, 0)) return false;
     }
     return true;
   }
@@ -3864,7 +3882,11 @@ function createClingSim(level){
         const hostRail = game.rails[ri];
         if (!hostRail){ obj.dead = true; continue; }
         const len = RL.length(hostRail);
-        obj.s = crawlerAdvanceS(obj.s, obj.direction, obj.speed, len);
+        if (hostRail.closed){
+          obj.s = crawlerAdvanceS(obj.s, obj.direction, obj.speed, len);
+        } else {
+          [obj.s, obj.direction] = crawlerAdvanceOpen(obj.s, obj.direction, obj.speed, len);
+        }
         obj.frameCount = (obj.frameCount || 0) + 1;
       } else if (obj.type === "toggle_wall"){
         obj._timer++;
@@ -5017,17 +5039,26 @@ function editorCrawlerHostRail(o){
   for (let hi = 0; hi < level.objects.length; hi++){
     const h = level.objects[hi];
     if (!SOLID_CRAWLER_HOSTS.has(h.type)) continue;
-    let cx, cy, len, ang, bw;
-    if (h.type === "sliding_wall" || h.type === "moving_wall"){
-      [cx,cy] = slideBodyScreen(h, effPos(h, hi));
-      len = h.length; ang = effAngle(h, hi);
-      bw = h.type === "sliding_wall" ? CFG.BAR_WIDTH : CFG.WALL_WIDTH;
+    let rail;
+    if (h.type === "peg"){
+      const [cx,cy] = toScreen(h.x, h.y);
+      rail = makePegRailS(cx, cy, pegRadiusOf(h));
+    } else if (h.type === "deflector" || h.type === "sweeper"){
+      const [cx,cy] = toScreen(h.x, h.y);
+      rail = makeOpenRailS(cx, cy, h.length, effAngle(h, hi));
     } else {
-      [cx,cy] = toScreen(h.x, h.y);
-      len = h.length; ang = effAngle(h, hi);
-      bw = (h.type === "wall") ? wallBodyWidth(h) : CFG.WALL_WIDTH;
+      let cx, cy, len, ang, bw;
+      if (h.type === "sliding_wall" || h.type === "moving_wall"){
+        [cx,cy] = slideBodyScreen(h, effPos(h, hi));
+        len = h.length; ang = effAngle(h, hi);
+        bw = h.type === "sliding_wall" ? CFG.BAR_WIDTH : CFG.WALL_WIDTH;
+      } else {
+        [cx,cy] = toScreen(h.x, h.y);
+        len = h.length; ang = effAngle(h, hi);
+        bw = (h.type === "wall") ? wallBodyWidth(h) : CFG.WALL_WIDTH;
+      }
+      rail = makeBarOutlineRailS(cx, cy, len, ang, bw);
     }
-    const rail = makeBarOutlineRailS(cx, cy, len, ang, bw);
     const [sx,sy] = toScreen(o.x, o.y);
     const cp = RL.closestPoint(rail, sx, sy);
     if (cp.d < bestD){ bestD = cp.d; bestRail = rail; }
@@ -5294,7 +5325,11 @@ function stepMovers(){
     } else if (o.type==="crawler" && rt.s !== undefined){
       const hostRail = editorCrawlerHostRail(o);
       const len = hostRail ? RL.length(hostRail) : 0;
-      rt.s = crawlerAdvanceS(rt.s, rt.dir, rt.speed, len);
+      if (hostRail && hostRail.closed === false){
+        [rt.s, rt.dir] = crawlerAdvanceOpen(rt.s, rt.dir, rt.speed, len);
+      } else {
+        rt.s = crawlerAdvanceS(rt.s, rt.dir, rt.speed, len);
+      }
     }
   }
 }
@@ -5333,7 +5368,7 @@ function startTest(){
   el("btnTest").classList.add("active");
   const unbound = testSim.objects.some(o => o.type === "crawler" && !o.host);
   el("stMode").innerHTML = "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>tilt</b> gravity &nbsp;<b>&#8593;</b> CLING/FIRE &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit"
-    + (unbound ? " &nbsp;· crawler has no solid host (wall / moving wall / toggle wall / sliding wall) — it stays put" : "");
+    + (unbound ? " &nbsp;· crawler has no host (wall / moving wall / toggle wall / sliding wall / peg / deflector) — it stays put" : "");
   cv.style.cursor = "default";
   cv.focus && cv.focus();
 }
