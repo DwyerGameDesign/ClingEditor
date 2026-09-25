@@ -276,7 +276,10 @@ const CFG = {
 
   CRAWLER_SPEEDS: {S:0.8,M:1.2,F:1.8},
   DEFAULT_CRAWLER_SPEED: 1.2,
+  DEFAULT_CRAWLER_FOLLOW_SPEED: 0.8,
   CRAWLER_RADIUS_DEFAULT: 10,
+  CRAWLER_FOLLOW_HYSTERESIS: 12,
+  CRAWLER_AMBUSH_WAKE_FRAMES: 15,
 
   DEFAULT_WALL_LENGTH: 70,
   DEFAULT_DEFLECTOR_LENGTH: 75,
@@ -452,7 +455,7 @@ function newObject(type, x, y){
       o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5; break;
     case "crawler":
       o.radius = CFG.CRAWLER_RADIUS_DEFAULT; o.direction = 1;
-      o.startPosition = 0; o.speed = "M"; break;
+      o.startPosition = 0; o.speed = "M"; o.mode = "patrol"; break;
     case "launcher": o.angle = 0; break;
     case "text": o.text = "Hint text"; o.align = "center"; break;
   }
@@ -500,6 +503,14 @@ function resolveSpeed(type, raw){
   if (typeof raw === "string" && tbl[raw] != null) return tbl[raw];
   return defaultSpeedForType(type);
 }
+function resolveCrawlerSpeed(raw, mode){
+  if ((raw == null || raw === "") && mode === "follow")
+    return CFG.DEFAULT_CRAWLER_FOLLOW_SPEED ?? 0.8;
+  return resolveSpeed("crawler", raw);
+}
+function crawlerModeOf(raw){
+  return (raw === "follow" || raw === "ambush") ? raw : "patrol";
+}
 
 /* =====================================================================
    Lua export (house style of levels.lua)
@@ -534,7 +545,7 @@ const EXPORT_SPEC = {
   sliding_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","plateId","pressedPosition"]},
   pressure_plate:{l1:["x","y","length","angle"], l2:["link","mode","holdFrames"]},
   ballast:      {l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition"]},
-  crawler:      {l1:["x","y","radius"], l2:["direction","startPosition","speed"]},
+  crawler:      {l1:["x","y","radius"], l2:["direction","startPosition","speed","mode"]},
   text:         {l1:["x","y"], l2:["text","align","angle","near","far"]},
 };
 function fmtParam(key, val){
@@ -569,7 +580,11 @@ function exportLevel(level){
   objs.forEach((o,i)=>{
     const spec = specs[i];
     const extras = o._extra ? Object.keys(o._extra) : [];
-    const l2keys = spec.l2.filter(k => o[k] !== undefined);
+    const l2keys = spec.l2.filter(k => {
+      if (o[k] === undefined) return false;
+      if (k === "mode" && (o.mode == null || o.mode === "patrol")) return false;
+      return true;
+    });
     const hasL2 = l2keys.length > 0 || (extras.length > 0 && spec.l2.length > 0);
 
     let line = "    { type = " + typeF[i].padEnd(typeW) + " ";
@@ -736,7 +751,7 @@ const KNOWN_KEYS = {
   sliding_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"],
   ballast:["x","y","radius","slideAngle","slideRange","objectPosition"],
   pressure_plate:["x","y","length","angle","link","mode","holdFrames"],
-  crawler:["x","y","radius","direction","startPosition","speed"],
+  crawler:["x","y","radius","direction","startPosition","speed","mode"],
   text:["x","y","text","align","near","far","angle"],
 };
 
@@ -766,7 +781,7 @@ const LEVEL_CODEC = {
   sliding_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"],
   ballast:["x","y","radius","slideAngle","slideRange","objectPosition"],
   pressure_plate:["x","y","length","angle","link","mode","holdFrames"],
-  crawler:["x","y","radius","direction","startPosition","speed"],
+  crawler:["x","y","radius","direction","startPosition","speed","mode"],
   text:["x","y","text","align","near","far","angle"],
 },
   TYPE_TO_CODE: {
@@ -823,7 +838,7 @@ const LEVEL_CODEC = {
   sliding_hazard:{radius:15,slideAngle:0,slideRange:60,objectPosition:0.5},
   ballast:{radius:8,slideAngle:0,slideRange:60,objectPosition:0.5},
   pressure_plate:{length:40,angle:0,link:1,mode:"hold",holdFrames:60},
-  crawler:{radius:10,direction:1,startPosition:0,speed:"M"},
+  crawler:{radius:10,direction:1,startPosition:0,speed:"M",mode:"patrol"},
   text:{text:"Hint text",angle:0},
 },
   NUMERIC_KEYS: new Set(["angle","angleStep","direction","far","holdFrames","length","link","maxAngle","maxOpen","maxSlide","minAngle","minSlide","near","objectPosition","plateId","pressedPosition","radius","slideAngle","slideOffset","slidePosition","startPosition","width","x","y"]),
@@ -977,6 +992,11 @@ const LEVEL_CODEC = {
         // Legacy slider group: consume the cell, do not keep the value.
         if (key !== "group") o[key] = val;
       }
+    }
+    // Follow's omitted speed is S, not the patrol default M.
+    if (typ === "crawler" && o.mode === "follow"){
+      const speedRaw = parts[7];
+      if (speedRaw === undefined || speedRaw === "") o.speed = undefined;
     }
     return {ok:true, obj:o};
   },
@@ -1301,7 +1321,10 @@ const SIM = {
 
   CRAWLER_SPEEDS: {S:0.8,M:1.2,F:1.8},
   DEFAULT_CRAWLER_SPEED: 1.2,
+  DEFAULT_CRAWLER_FOLLOW_SPEED: 0.8,
   CRAWLER_RADIUS_DEFAULT: 10,
+  CRAWLER_FOLLOW_HYSTERESIS: 12,
+  CRAWLER_AMBUSH_WAKE_FRAMES: 15,
 
   PLATE_WIDTH: 8,
   PLATE_TRAVEL: 3,
@@ -1803,12 +1826,15 @@ function makeSimObjects(level){
       case "crawler": {
         o.radius = a.radius ?? CFG.CRAWLER_RADIUS_DEFAULT;
         o.direction = (a.direction === -1) ? -1 : 1;
+        o.mode = crawlerModeOf(a.mode);
         o.startPosition = (typeof a.startPosition === "number") ? a.startPosition : null;
-        let spd = resolveSpeed("crawler", a.speed);
+        let spd = resolveCrawlerSpeed(a.speed, o.mode);
         const maxStep = (CFG.CRAWLER_RADIUS_DEFAULT || 10) * 0.5;
         if (spd >= maxStep) spd = maxStep - 0.01;
         o.speed = spd;
         o.s = 0; o.host = null; o.dead = false; o.frameCount = 0;
+        o._ambushState = "dormant"; o._ambushTimer = 0;
+        o._authoredDir = o.direction;
         break;
       }
       case "sweeper":
@@ -1954,6 +1980,58 @@ function crawlerAdvanceOpen(s, direction, speed, length){
     if (s > length) s = length;
   }
   return [s, direction];
+}
+function crawlerWrapS(s, length){
+  s = mod(s || 0, length);
+  return s;
+}
+function crawlerFollowStep(s, targetS, dir, speed, length, hysteresis){
+  if (!length || length <= 0) return [s || 0, dir || 1];
+  dir = (dir === -1) ? -1 : 1;
+  speed = speed || 0;
+  if (speed < 0) speed = 0;
+  hysteresis = hysteresis || 0;
+  if (hysteresis < 0) hysteresis = 0;
+  s = crawlerWrapS(s, length);
+  targetS = crawlerWrapS(targetS, length);
+  let forward = targetS - s;
+  if (forward < 0) forward += length;
+  const backward = length - forward;
+  if (forward === 0) return [s, dir];
+  const curDist = (dir === 1) ? forward : backward;
+  const otherDist = (dir === 1) ? backward : forward;
+  let travelDir = dir;
+  if (otherDist + hysteresis < curDist) travelDir = -dir;
+  const remain = (travelDir === 1) ? forward : backward;
+  if (remain <= speed) return [targetS, travelDir];
+  return [crawlerWrapS(s + travelDir * speed, length), travelDir];
+}
+function crawlerFollowOpen(s, targetS, dir, speed, length){
+  if (!length || length <= 0) return [s || 0, dir || 1];
+  dir = (dir === -1) ? -1 : 1;
+  speed = speed || 0;
+  if (speed < 0) speed = 0;
+  s = s || 0;
+  targetS = targetS || 0;
+  if (targetS < 0) targetS = 0; else if (targetS > length) targetS = length;
+  const delta = targetS - s;
+  const ad = Math.abs(delta);
+  if (ad === 0) return [s, dir];
+  if (ad <= speed) return [targetS, delta > 0 ? 1 : -1];
+  if (delta > 0) return [s + speed, 1];
+  return [s - speed, -1];
+}
+function crawlerAmbushTick(state, timer, playerOnHost, wakeFrames){
+  wakeFrames = wakeFrames || 0;
+  timer = timer || 0;
+  if (state === "active") return ["active", timer];
+  if (state === "waking"){
+    timer += 1;
+    if (timer >= wakeFrames) return ["active", timer];
+    return ["waking", timer];
+  }
+  if (playerOnHost) return ["waking", 0];
+  return ["dormant", 0];
 }
 function simGetMouthPos(o){
   const a = rad(o.angle||0);
@@ -3069,6 +3147,16 @@ function createClingSim(level){
     }
     boardRail(railIndex, landS, sign, push, sign, ball.flightX, ball.flightY);
   }
+  function resetCrawlers(){
+    for (const obj of objects){
+      if (obj.type !== "crawler") continue;
+      obj.dead = false;
+      if (obj._initialS != null) obj.s = obj._initialS;
+      if (obj._authoredDir === 1 || obj._authoredDir === -1) obj.direction = obj._authoredDir;
+      obj._ambushState = "dormant";
+      obj._ambushTimer = 0;
+    }
+  }
   function die(){
     resetToSpawn();
     ball.respawnFlash = 22;
@@ -3078,6 +3166,7 @@ function createClingSim(level){
     }
     game.keysCollected = 0;
     game.exitUnlocked = (game.keysTotal || 0) === 0;
+    resetCrawlers();
   }
   function tryCatchFlight(){
     const snap = SIM.LAUNCH_CATCH_SNAP;
@@ -3874,15 +3963,35 @@ function createClingSim(level){
       } else if (obj.type === "crawler"){
         if (obj.dead) continue;
         const host = obj.host;
-        // No host yet: stay at the authored seat. Only a host that lost its
-        // outline (rail gone) despawns. Matches Crawler:step.
         if (!host) continue;
         const ri = railIndexOf(host);
         if (!ri){ obj.dead = true; continue; }
         const hostRail = game.rails[ri];
         if (!hostRail){ obj.dead = true; continue; }
         const len = RL.length(hostRail);
-        if (hostRail.closed){
+        const mode = crawlerModeOf(obj.mode);
+        if (mode === "follow"){
+          if (ball.respawnFlash > 0) { /* hold while respawning */ }
+          else {
+            const [px,py] = worldPos();
+            const targetS = RL.closestPoint(hostRail, px, py).s;
+            const hyst = SIM.CRAWLER_FOLLOW_HYSTERESIS ?? 12;
+            if (hostRail.closed){
+              [obj.s, obj.direction] = crawlerFollowStep(obj.s, targetS, obj.direction, obj.speed, len, hyst);
+            } else {
+              [obj.s, obj.direction] = crawlerFollowOpen(obj.s, targetS, obj.direction, obj.speed, len);
+            }
+          }
+        } else if (mode === "ambush"){
+          const onHost = ball.mode === "cling" && ball.rail === ri;
+          const wake = SIM.CRAWLER_AMBUSH_WAKE_FRAMES ?? 15;
+          [obj._ambushState, obj._ambushTimer] = crawlerAmbushTick(
+            obj._ambushState, obj._ambushTimer, onHost, wake);
+          if (obj._ambushState === "active"){
+            if (hostRail.closed) obj.s = crawlerAdvanceS(obj.s, obj.direction, obj.speed, len);
+            else [obj.s, obj.direction] = crawlerAdvanceOpen(obj.s, obj.direction, obj.speed, len);
+          }
+        } else if (hostRail.closed){
           obj.s = crawlerAdvanceS(obj.s, obj.direction, obj.speed, len);
         } else {
           [obj.s, obj.direction] = crawlerAdvanceOpen(obj.s, obj.direction, obj.speed, len);
@@ -4063,6 +4172,12 @@ function createClingSim(level){
       } else {
         obj.s = bestS;
       }
+      obj._initialS = obj.s;
+      if (obj._authoredDir !== 1 && obj._authoredDir !== -1)
+        obj._authoredDir = (obj.direction === -1) ? -1 : 1;
+      obj.direction = obj._authoredDir;
+      obj._ambushState = "dormant";
+      obj._ambushTimer = 0;
     }
   }
   function applyDeflectorTargetAngle(obj, targetAngle){
@@ -4584,6 +4699,37 @@ function drawHazardBody(cx,cy,r,fc){
   ctx.strokeStyle = INK; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.arc(cx,cy,5,0,7); ctx.stroke();
 }
+function drawCrawlerGlyph(cx, cy, radius, dir, fc, hostRail, s, look, aimX, aimY){
+  const r = radius || CFG.CRAWLER_RADIUS_DEFAULT;
+  if (look === "dormant"){
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    drawHazardBody(cx, cy, r, 0);
+    ctx.restore();
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(cx - 3, cy); ctx.lineTo(cx + 3, cy); ctx.stroke();
+    return;
+  }
+  if (hostRail){
+    ctx.fillStyle = INK;
+    const d = dir || 1;
+    for (let k = 1; k <= 3; k++){
+      const [tx,ty] = RL.pointAt(hostRail, s - d * k * 6);
+      ctx.beginPath(); ctx.arc(tx, ty, 1, 0, 7); ctx.fill();
+    }
+  }
+  drawHazardBody(cx, cy, r, (fc || 0) * (dir || 1));
+  if (look === "follow"){
+    let ox = 0, oy = 0;
+    if (aimX != null && aimY != null){
+      const dx = aimX - cx, dy = aimY - cy;
+      const dlen = Math.hypot(dx, dy);
+      if (dlen > 0.01){ ox = dx / dlen * 1.5; oy = dy / dlen * 1.5; }
+    }
+    ctx.fillStyle = "#fff";
+    ctx.beginPath(); ctx.arc(cx + ox, cy + oy, 2, 0, 7); ctx.fill();
+  }
+}
 /** Half-extent of the body along the slide axis (visual rail only; mirrors entities.lua).
  *  sliding_hazard endstops sit on the center's travel limits. */
 function slideVisualExtent(o){
@@ -4974,9 +5120,12 @@ function drawObject(o,i){
     case "pressure_plate": drawPressurePlate(o,i); break;
     case "crawler": {
       const hostRail = editorCrawlerHostRail(o);
-      let cx, cy, s;
-      if (playing && runtime && runtime[i] && runtime[i].s !== undefined && hostRail){
-        s = runtime[i].s;
+      const mode = crawlerModeOf(o.mode);
+      const rt = (playing && runtime && runtime[i]) ? runtime[i] : null;
+      let cx, cy, s, dir;
+      if (rt && rt.s !== undefined && hostRail){
+        s = rt.s;
+        dir = rt.dir;
         [cx,cy] = RL.pointAt(hostRail, s);
       } else if (hostRail){
         const len = RL.length(hostRail);
@@ -4987,19 +5136,19 @@ function drawObject(o,i){
           s = RL.closestPoint(hostRail, sx, sy).s;
         }
         [cx,cy] = RL.pointAt(hostRail, s);
+        dir = (o.direction === -1) ? -1 : 1;
       } else {
         [cx,cy] = toScreen(o.x, o.y);
         s = 0;
+        dir = (o.direction === -1) ? -1 : 1;
       }
-      const dir = (o.direction === -1) ? -1 : 1;
-      if (hostRail){
-        ctx.fillStyle = INK;
-        for (let k = 1; k <= 3; k++){
-          const [tx,ty] = RL.pointAt(hostRail, s - dir * k * 6);
-          ctx.beginPath(); ctx.arc(tx, ty, 1, 0, 7); ctx.fill();
-        }
+      let look = mode === "follow" ? "follow" : "live";
+      if (mode === "ambush"){
+        const st = rt ? rt.ambush : "dormant";
+        look = (st === "active") ? "live" : "dormant";
+        if (st === "waking" && (frame % 6) < 3) look = "live";
       }
-      drawHazardBody(cx, cy, o.radius || CFG.CRAWLER_RADIUS_DEFAULT, frame * dir);
+      drawCrawlerGlyph(cx, cy, o.radius, dir, frame, hostRail, s, look, null, null);
       break;
     }
     case "launcher": drawLauncher(o,i,selected); break;
@@ -5276,6 +5425,7 @@ function startPlay(){
               speed:resolveSpeed(o.type, o.speed)};
     if (o.type==="crawler"){
       const hostRail = editorCrawlerHostRail(o);
+      const mode = crawlerModeOf(o.mode);
       let s = 0;
       if (hostRail){
         const len = RL.length(hostRail);
@@ -5286,7 +5436,8 @@ function startPlay(){
           s = RL.closestPoint(hostRail, sx, sy).s;
         }
       }
-      return {s, dir:(o.direction===-1)?-1:1, speed:resolveSpeed("crawler", o.speed)};
+      return {s, dir:(o.direction===-1)?-1:1, speed:resolveCrawlerSpeed(o.speed, mode),
+              mode, ambush:"dormant", timer:0};
     }
     return {};
   });
@@ -5323,12 +5474,17 @@ function stepMovers(){
       if (rt.pos >= 1){ rt.pos = 1; rt.dir = -1; }
       else if (rt.pos <= 0){ rt.pos = 0; rt.dir = 1; }
     } else if (o.type==="crawler" && rt.s !== undefined){
-      const hostRail = editorCrawlerHostRail(o);
-      const len = hostRail ? RL.length(hostRail) : 0;
-      if (hostRail && hostRail.closed === false){
-        [rt.s, rt.dir] = crawlerAdvanceOpen(rt.s, rt.dir, rt.speed, len);
+      const mode = rt.mode || crawlerModeOf(o.mode);
+      if (mode === "follow" || (mode === "ambush" && rt.ambush !== "active")){
+        // Mover preview has no ball: followers hold, ambush stays asleep.
       } else {
-        rt.s = crawlerAdvanceS(rt.s, rt.dir, rt.speed, len);
+        const hostRail = editorCrawlerHostRail(o);
+        const len = hostRail ? RL.length(hostRail) : 0;
+        if (hostRail && hostRail.closed === false){
+          [rt.s, rt.dir] = crawlerAdvanceOpen(rt.s, rt.dir, rt.speed, len);
+        } else {
+          rt.s = crawlerAdvanceS(rt.s, rt.dir, rt.speed, len);
+        }
       }
     }
   }
@@ -5520,23 +5676,25 @@ function drawSim(sim){
         break;
       case "crawler": {
         if (obj.dead) break;
-        let px = obj.x, py = obj.y;
+        let px = obj.x, py = obj.y, s = obj.s || 0, hostRail = null;
         if (obj.host){
           const owners = g.railOwners || [];
           let ri = -1;
           for (let i = 1; i < owners.length; i++) if (owners[i] === obj.host){ ri = i; break; }
           if (ri > 0 && g.rails[ri]){
-            const dir = obj.direction || 1;
-            const s = obj.s || 0;
-            ctx.fillStyle = INK;
-            for (let k = 1; k <= 3; k++){
-              const [tx,ty] = RL.pointAt(g.rails[ri], s - dir * k * 6);
-              ctx.beginPath(); ctx.arc(tx, ty, 1, 0, 7); ctx.fill();
-            }
-            [px,py] = RL.pointAt(g.rails[ri], s);
+            hostRail = g.rails[ri];
+            [px,py] = RL.pointAt(hostRail, s);
           }
         }
-        drawHazardBody(px, py, obj.radius, (obj.frameCount || frame) * (obj.direction || 1));
+        const mode = crawlerModeOf(obj.mode);
+        let look = mode === "follow" ? "follow" : "live";
+        if (mode === "ambush"){
+          const st = obj._ambushState || "dormant";
+          look = st === "active" ? "live" : "dormant";
+          if (st === "waking" && ((obj.frameCount || frame) % 6) < 3) look = "live";
+        }
+        const [ax,ay] = sim.worldPos();
+        drawCrawlerGlyph(px, py, obj.radius, obj.direction || 1, obj.frameCount || frame, hostRail, s, look, ax, ay);
         break;
       }
       case "sweeper": drawSweeperAtS(obj.x, obj.y, obj.length, obj.angle); break;
@@ -5871,6 +6029,30 @@ function validate(){
   if (objs.length > LEVEL_CODEC.MAX_OBJECTS){
     errs.push(`${objs.length} objects exceeds share-code MAX_OBJECTS (${LEVEL_CODEC.MAX_OBJECTS}).`);
   }
+
+  objs.forEach((o,i)=>{
+    if (o.type !== "crawler") return;
+    const mode = o.mode;
+    if (mode != null && mode !== "patrol" && mode !== "follow" && mode !== "ambush")
+      errs.push(`#${i+1} crawler has unknown mode '${mode}' (expected patrol, follow, or ambush).`);
+  });
+  const spawn = objs.find(o => o.type === "spawn");
+  if (spawn){
+    const [sx,sy] = toScreen(spawn.x, spawn.y);
+    const nearest = editorCrawlerHostRail({type:"crawler", x: spawn.x, y: spawn.y});
+    const arenaD = RL.closestPoint(arenaRailS(resolveArenaBorders(level)), sx, sy).d;
+    const spawnD = nearest ? RL.closestPoint(nearest, sx, sy).d : Infinity;
+    if (nearest && spawnD + 0.01 < arenaD){
+      objs.forEach((o,i)=>{
+        if (o.type !== "crawler" || crawlerModeOf(o.mode) !== "ambush") return;
+        const rail = editorCrawlerHostRail(o);
+        if (!rail) return;
+        const d = RL.closestPoint(rail, sx, sy).d;
+        if (Math.abs(d - spawnD) < 0.5)
+          warns.push(`#${i+1} ambush crawler wakes on frame 1: spawn clings to its host.`);
+      });
+    }
+  }
   if (provenClearFrames != null){
     infos.push(`Proven clear: ${provenClearFrames} frames (par). Re-test after edits.`);
   } else {
@@ -5944,7 +6126,8 @@ function segControl(options, current, onPick, labeler){
 function propSeg(label, key, o, options, applyFn){
   const row = document.createElement("div"); row.className="prop-row";
   const lab = document.createElement("label"); lab.textContent = label;
-  row.append(lab, segControl(options, o[key], (opt)=>{
+  const current = (key === "mode" && o.type === "crawler") ? crawlerModeOf(o[key]) : o[key];
+  row.append(lab, segControl(options, current, (opt)=>{
     stopPlay(); pushUndo();
     if (applyFn) applyFn(opt); else o[key] = opt;
     commit(); renderProps();
@@ -5978,6 +6161,18 @@ function renderProps(){
     box.appendChild(hint);
   }
   if (t==="crawler"){
+    box.appendChild(propSeg("mode", "mode", o, ["patrol","follow","ambush"], (M)=>{
+      o.mode = M;
+      if (M === "follow" && (o.speed == null || o.speed === "M")) o.speed = "S";
+      if (M !== "follow" && o.speed === "S") o.speed = "M";
+    }));
+    const modeHint = document.createElement("div"); modeHint.className = "hint";
+    modeHint.textContent = o.mode === "follow"
+      ? "tracks the player along the host outline; default speed S"
+      : o.mode === "ambush"
+      ? "sleeps until Cling lands on this host, then patrols"
+      : "constant lap in the authored direction";
+    box.appendChild(modeHint);
     const row = document.createElement("div"); row.className="prop-row";
     const lab = document.createElement("label"); lab.textContent="direction";
     row.append(lab, segControl(["+1","-1"], o.direction===-1?"-1":"+1", (L)=>{
