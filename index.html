@@ -168,6 +168,12 @@
     <span class="edge-tgl">R <select id="bdRight"><option value="full">full</option><option value="open">open</option><option value="spikes">spikes</option></select></span>
   </label>
   <label>tutorial <input id="lvTutorial" type="text" placeholder="(optional hint)"></label>
+  <label title="Level mode. standard keeps down fixed and selects L/R groups. gravityflip follows the device.">mode
+    <select id="lvMode">
+      <option value="standard">standard</option>
+      <option value="gravityflip">gravityflip</option>
+    </select>
+  </label>
   <div class="spacer"></div>
   <label>load <select id="lvLoad"><option value="">— built-in level —</option></select></label>
   <button id="btnNew">New</button>
@@ -535,14 +541,14 @@ const EXPORT_SPEC = {
   hazard:       {l1:["x","y","radius"], l2:[]},
   wall:         {l1:["x","y","length","angle","width"], l2:[]},
   peg:          {l1:["x","y","radius"], l2:[]},
-  deflector:    {l1:["x","y","length","angle","gravity"], l2:[]},
+  deflector:    {l1:["x","y","length","angle","gravity","group"], l2:[]},
   launcher:     {l1:["x","y","angle"], l2:[]},
   sweeper:      {l1:["x","y","length","angle"], l2:["minAngle","maxAngle","speed"]},
   toggle_wall:  {l1:["x","y","length","angle"], l2:["angleStep","speed"]},
-  sliding_wall: {l1:["x","y","length","angle"], l2:["slideAngle","slideRange","objectPosition","plateId","pressedPosition"]},
+  sliding_wall: {l1:["x","y","length","angle"], l2:["slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"]},
   moving_wall:  {l1:["x","y","length","angle"], l2:["slideAngle","slideRange","objectPosition","speed"]},
   moving_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","speed"]},
-  sliding_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","plateId","pressedPosition"]},
+  sliding_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"]},
   pressure_plate:{l1:["x","y","length","angle"], l2:["link","mode","holdFrames"]},
   ballast:      {l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition"]},
   crawler:      {l1:["x","y","radius"], l2:["direction","startPosition","speed","mode"]},
@@ -569,6 +575,10 @@ function exportLevel(level){
   const borders = resolveArenaBorders(level);
   const borderLua = `borders = { top = ${luaStr(borders.top)}, bottom = ${luaStr(borders.bottom)}, left = ${luaStr(borders.left)}, right = ${luaStr(borders.right)} }`;
   let head = `  { name = ${luaStr(level.name||"Untitled")}, ${borderLua},`;
+  const mode = (level.mode === "nogravity" || level.mode === "crank") ? "standard" : level.mode;
+  if (typeof mode === "string" && mode !== "" && mode !== "gravityflip" && mode !== "gravity"){
+    head += ` mode = ${luaStr(mode)},`;
+  }
   const hasTutorial = level.tutorial && String(level.tutorial).trim() !== "";
   if (hasTutorial){
     lines.push(head);
@@ -594,6 +604,7 @@ function exportLevel(level){
       // Default wall width is implicit (CLING_WALL_WIDTH=10); omit from export.
       if (k === "width" && o.type === "wall" && o[k] === CFG.WALL_WIDTH) continue;
       if (k === "gravity" && o[k] !== true) continue;
+      if (k === "group" && o[k] !== "L" && o[k] !== "R") continue;
       if (k === "x"){
         parts.push("x = " + (xVals[i]+",").padEnd(xW+1));
       } else if (k === "y"){
@@ -741,7 +752,7 @@ const KNOWN_KEYS = {
   hazard:["x","y","radius"],
   wall:["x","y","length","angle","width"],
   peg:["x","y","radius"],
-  deflector:["x","y","length","angle","gravity"],
+  deflector:["x","y","length","angle","gravity","group"],
   launcher:["x","y","angle"],
   sweeper:["x","y","length","angle","minAngle","maxAngle","speed"],
   toggle_wall:["x","y","length","angle","angleStep","speed"],
@@ -771,7 +782,7 @@ const LEVEL_CODEC = {
   hazard:["x","y","radius"],
   wall:["x","y","length","angle","width"],
   peg:["x","y","radius"],
-  deflector:["x","y","length","angle","gravity"],
+  deflector:["x","y","length","angle","gravity","group"],
   launcher:["x","y","angle"],
   sweeper:["x","y","length","angle","minAngle","maxAngle","speed"],
   toggle_wall:["x","y","length","angle","angleStep","speed"],
@@ -956,14 +967,19 @@ const LEVEL_CODEC = {
     for (let i = 0; i < keys.length; i++){
       const key = keys[i];
       let val = o[key];
-      // Slider group is a legacy positional slot. Never emit it.
+      // Group is only L or R. Gravity false stays empty; L/R in the
+      // gravity cell means on (legacy), never a crank group.
+      const grouped = key === "group" && (val === "L" || val === "R");
       const gravityOn = val === true || val === "true" || val === "L" || val === "R";
-      if (key === "group" || (key === "gravity" && !gravityOn)){
+      if (key === "group" && !grouped){
+        fields.push("");
+      } else if (key === "gravity" && !gravityOn){
         fields.push("");
       } else if (val === undefined || val === null || this.isDefault(typ, key, val)){
         fields.push("");
       } else {
         if (key === "gravity") val = true;
+        if (grouped) val = val === "R" ? "R" : "L";
         fields.push(this.formatValue(key, val));
         lastPresent = i + 1;
       }
@@ -989,8 +1005,9 @@ const LEVEL_CODEC = {
         let val;
         try { val = this.parseValue(key, raw); }
         catch (e){ return {ok:false, err:String(e.message || e)}; }
-        // Legacy slider group: consume the cell, do not keep the value.
-        if (key !== "group") o[key] = val;
+        if (key === "group"){
+          if (val === "L" || val === "R") o[key] = val;
+        } else o[key] = val;
       }
     }
     // Follow's omitted speed is S, not the patrol default M.
@@ -1009,9 +1026,13 @@ const LEVEL_CODEC = {
     if (typeof par === "number" && isFinite(par) && par >= 0){
       parts.push("par=" + this.fmtNum(par));
     }
+    const mode = (level.mode === "nogravity" || level.mode === "crank") ? "standard" : level.mode;
+    if (typeof mode === "string" && mode !== "" && mode !== "gravityflip" && mode !== "gravity"){
+      parts.push("mode=" + this.escape(mode));
+    }
     if (level._extras){
       for (const [k,v] of Object.entries(level._extras)){
-        if (k === "tutorial" || k === "par") continue;
+        if (k === "tutorial" || k === "par" || k === "mode") continue;
         parts.push(this.escape(k) + "=" + this.escape(v));
       }
     }
@@ -1029,6 +1050,8 @@ const LEVEL_CODEC = {
       else if (k === "par"){
         const n = Number(v);
         if (Number.isFinite(n)) out.par_frames = n;
+      } else if (k === "mode"){
+        if (v !== "") out.mode = v;
       } else {
         out._extras = out._extras || {};
         out._extras[k] = v;
@@ -1088,6 +1111,7 @@ const LEVEL_CODEC = {
       const extras = this.decodeExtras(fields[5]);
       if (extras.tutorial) level.tutorial = extras.tutorial;
       if (extras.par_frames != null) level.par_frames = extras.par_frames;
+      if (extras.mode) level.mode = extras.mode;
       if (extras._extras) level._extras = extras._extras;
     }
     return {ok:true, level};
@@ -1119,6 +1143,9 @@ function importLevelFromLua(text){
     borders: defaultBorders(),
     objects: [],
   };
+  if (typeof lt.map.mode === "string" && lt.map.mode !== "" && lt.map.mode !== "gravity" && lt.map.mode !== "gravityflip"){
+    level.mode = (lt.map.mode === "nogravity" || lt.map.mode === "crank") ? "standard" : lt.map.mode;
+  }
   if (lt.map.keysRequired !== undefined){
     notes.push("Dropped level keysRequired (key count is derived from key objects).");
   }
@@ -1220,27 +1247,27 @@ function importLevelFromLua(text){
       }
     }
     if (o._extra && Object.keys(o._extra).length === 0) delete o._extra;
-    // Deflector gravity is opt-in. newObject defaults it on, which would turn
-    // an omitted field into a tilt blade. Legacy group L/R means gravity on.
+    // Deflector gravity is opt-in. Legacy gravity "L"/"R" means tilt.
+    // group "L"/"R" is a crank group and wins over gravity.
     let deflectorGravity = null;
     if (type === "deflector"){
       const gv = m.gravity;
-      const legacy = (m.group === "L" || m.group === "R") ? m.group
-        : (o._extra && (o._extra.group === "L" || o._extra.group === "R") ? o._extra.group : null);
-      if (gv === true || gv === "true" || gv === "L" || gv === "R"){
+      const grouped = (o.group === "L" || o.group === "R") ? o.group : null;
+      if (grouped){
+        o.group = grouped;
+        deflectorGravity = false;
+      } else if (gv === true || gv === "true" || gv === "L" || gv === "R"){
         deflectorGravity = true;
-      } else if (legacy){
-        deflectorGravity = true;
-        notes.push("deflector: converted group \""+legacy+"\" → gravity.");
+        delete o.group;
       } else {
         deflectorGravity = false;
+        delete o.group;
       }
       delete o.gravity;
-      delete o.group;
       if (o._extra) delete o._extra.group;
     }
     if (type === "sliding_wall" || type === "sliding_hazard"){
-      delete o.group;
+      if (o.group !== "L" && o.group !== "R") delete o.group;
       if (o._extra) delete o._extra.group;
     }
     if (o._extra && Object.keys(o._extra).length === 0) delete o._extra;
@@ -1346,6 +1373,21 @@ const mod = (a,n)=>{ const r = a % n; return r < 0 ? r + n : r; };
 
 /* ---------------- gravity / tilt (ports of main.lua + entities.lua) ---------------- */
 let viewRollDeg = 0;
+let activeLevelMode = "gravityflip";
+// Omitted and legacy "gravity" are gravityflip. Legacy "nogravity" and "crank" are standard.
+function levelModeOf(lv){
+  const m = lv && lv.mode;
+  if (m === "standard" || m === "nogravity" || m === "crank") return "standard";
+  if (m == null || m === "" || m === "gravity" || m === "gravityflip") return "gravityflip";
+  return m;
+}
+function objectDrive(o){
+  if (!o || o.plateId != null || o.plateDriven) return null;
+  if (o.type !== "deflector" && o.type !== "sliding_wall" && o.type !== "sliding_hazard") return null;
+  if (o.group === "L" || o.group === "R") return o.group;
+  if (o.type === "deflector") return o.gravity === true ? "gravity" : null;
+  return "gravity";
+}
 let viewDpadSteps = 0;
 let viewScale = 1;   // CSS scale that keeps the rotated frame inside #stage
 
@@ -1377,6 +1419,7 @@ function updateDpadQuadrant(rollDeg){
   viewDpadSteps = mod(viewDpadSteps, 4);
 }
 function gravityDpad(){
+  if (activeLevelMode !== "gravityflip") return [0, 2];
   if (CFG.ACCEL_DPAD_REMAP_ENABLED === false) return [0, 2];
   const away = viewDpadSteps % 4;
   return [away, (away + 2) % 4];
@@ -1445,6 +1488,7 @@ function stepSliderGravity(obj, rollDeg){
   return newPos;
 }
 function followsTilt(o){
+  if (activeLevelMode !== "gravityflip") return false;
   if (!o) return false;
   if (o.plateId != null || o.plateDriven) return false;
   if (o.type === "deflector") return o.gravity === true;
@@ -1816,7 +1860,9 @@ function makeSimObjects(level){
         if (a.type === "wall" && typeof a.width === "number") o.width = a.width;
         // gravity true follows tilt; omit = static blade.
         if (a.type === "deflector"){
-          o.gravity = a.gravity === true;
+          const grouped = a.group === "L" || a.group === "R";
+          o.gravity = a.gravity === true && !grouped;
+          if (grouped) o.group = a.group;
           o._cfg = { angle: o.angle };
         }
         break;
@@ -1862,6 +1908,8 @@ function makeSimObjects(level){
           o.plateId = a.plateId;
           o.plateDriven = true;
           o.restPosition = o.objectPosition;
+        } else if (a.group === "L" || a.group === "R"){
+          o.group = a.group;
         }
         if (a.type === "sliding_wall" || a.type === "sliding_hazard"){
           o._slideVel = 0;
@@ -2061,15 +2109,17 @@ function createClingSim(level){
     frameCount: 0,
     tutorial: level.tutorial || "",
     levelName: level.name || "",
+    levelMode: levelModeOf(level),
+    crankGroups: { L: [], R: [] },
     gravityDpad,
     gravityVec,
   };
+  activeLevelMode = game.levelMode;
   for (const obj of objects){
-    // Launchers dock on contact. A deflector follows tilt only with gravity.
-    // Sliders follow tilt unless a plate drives them.
-    if (obj.type==="deflector" || obj.type==="sliding_wall" || obj.type==="sliding_hazard"){
-      if (obj.plateDriven) continue;
-      if (obj.type === "deflector" && !obj.gravity) continue;
+    const drive = objectDrive(obj);
+    if (drive === "L" || drive === "R"){
+      if (game.levelMode === "standard") game.crankGroups[drive].push(obj);
+    } else if (drive === "gravity" && game.levelMode === "gravityflip"){
       game.tilt.push(obj);
     }
   }
@@ -4212,6 +4262,7 @@ function createClingSim(level){
   }
   function applyAccelToCrankables(){
     if (game.levelComplete) return;
+    if (game.levelMode !== "gravityflip") return;
     const rollDeg = viewRollDeg;
     const members = game.tilt;
     if (members){
@@ -4274,6 +4325,12 @@ function createClingSim(level){
       obj.angle = mod(obj.angle + change * SIM.LAUNCHER_CRANK_SENS, 360);
     }
   }
+  function selectGroup(side){
+    if (game.levelMode !== "standard") return;
+    const members = game.crankGroups && game.crankGroups[side];
+    if (!members || !members.length) return;
+    game.selTarget = (game.selTarget === side) ? "cling" : side;
+  }
   function selectCling(){
     if (isDocked()){ fire(); return; }
     if (game.selTarget === "cling") return;
@@ -4327,6 +4384,11 @@ function createClingSim(level){
     if (isDocked()){
       const launcher = ball.dockedLauncher;
       if (launcher){ applyCrankToObject(launcher, change); return; }
+    }
+    if (game.levelMode === "standard" && (game.selTarget === "L" || game.selTarget === "R")){
+      const members = (game.crankGroups && game.crankGroups[game.selTarget]) || [];
+      for (const obj of members) applyCrankToObject(obj, change);
+      return;
     }
     if (isInFlight()) return;
     if (isFalling()){
@@ -4443,6 +4505,7 @@ function createClingSim(level){
     if (isDocked()) return "CRANK: AIM · \u2191 FIRE";
     if (isInFlight()) return "FLIGHT";
     if (isFalling()) return "FALLING";
+    if (game.selTarget === "L" || game.selTarget === "R") return "CRANK: " + game.selTarget;
     if (game.selTarget === "cling") return "CRANK: CLING";
     return "CRANK: ?";
   }
@@ -4462,7 +4525,7 @@ function createClingSim(level){
 
   return {
     game, ball, objects, keysTotal,
-    update, handleCrank, selectCling, tryDrop, tryJump, onAwayFromGravity,
+    update, handleCrank, selectCling, selectGroup, tryDrop, tryJump, onAwayFromGravity,
     restartLevel, applyAccelToCrankables,
     worldPos, selectionLabel, fire,
     isDocked, isInFlight, isFalling,
@@ -4807,8 +4870,23 @@ function drawGravityBadgeAtS(cx, cy){
   ctx.fillStyle = INK;
   ctx.beginPath(); ctx.arc(cx + gx * 3.5, cy + gy * 3.5, 2, 0, 7); ctx.fill();
 }
-function drawDeflectorAtS(cx,cy,length,angleDeg,selected,gravity){
-  // BLADE: thin centerline + rounded tips; plumb only if tilt-driven (static = rail only).
+function drawGroupArrowBadgeAtS(cx, cy, group){
+  // Same hub disc as the plumb. Triangle matches the d-pad up/down glyph.
+  const dir = group === "L" ? -1 : 1;
+  ctx.fillStyle = "#fff";
+  ctx.beginPath(); ctx.arc(cx, cy, 6, 0, 7); ctx.fill();
+  ctx.strokeStyle = INK; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, 7, 0, 7); ctx.stroke();
+  ctx.fillStyle = INK;
+  ctx.beginPath();
+  ctx.moveTo(cx + dir * 3, cy);
+  ctx.lineTo(cx - dir * 3, cy - 4);
+  ctx.lineTo(cx - dir * 3, cy + 4);
+  ctx.closePath();
+  ctx.fill();
+}
+function drawDeflectorAtS(cx,cy,length,angleDeg,selected,gravity,group){
+  // BLADE: thin centerline + rounded tips. Hub mark only when driven.
   const a = rad(angleDeg), c=Math.cos(a), s=Math.sin(a), hL=length/2;
   const x1=cx-c*hL, y1=cy-s*hL, x2=cx+c*hL, y2=cy+s*hL;
   if (selected) dashedCircle(cx,cy,hL+4);
@@ -4820,10 +4898,11 @@ function drawDeflectorAtS(cx,cy,length,angleDeg,selected,gravity){
   ctx.beginPath(); ctx.arc(x1,y1,tipR,0,7); ctx.fill();
   ctx.beginPath(); ctx.arc(x2,y2,tipR,0,7); ctx.fill();
   if (gravity) drawGravityBadgeAtS(cx, cy);
+  else if (group === "L" || group === "R") drawGroupArrowBadgeAtS(cx, cy, group);
 }
 function drawDeflector(o,i,selected){
   const [cx,cy] = toScreen(o.x,o.y);
-  drawDeflectorAtS(cx,cy,o.length,effAngle(o,i),selected,o.gravity === true);
+  drawDeflectorAtS(cx,cy,o.length,effAngle(o,i),selected,o.gravity === true,o.group);
 }
 function drawPressurePlate(o,i){
   const rt = (playing && runtime && runtime[i]) ? runtime[i] : null;
@@ -5082,7 +5161,7 @@ function drawObject(o,i){
       const [cx,cy]=slideBodyScreen(o,effPos(o,i));
       drawWallBody(cx,cy,o.length,effAngle(o,i), selected?7:undefined, CFG.BAR_WIDTH);
       if (o.plateId != null) drawLinkBadgeAtS(cx, cy, o.plateId);
-      else drawGravityBadgeAtS(cx, cy);
+      else if (o.group !== "L" && o.group !== "R") drawGravityBadgeAtS(cx, cy);
       break;
     }
     case "moving_wall": {
@@ -5102,7 +5181,7 @@ function drawObject(o,i){
       const [cx,cy]=slideBodyScreen(o,effPos(o,i));
       drawHazardBody(cx,cy,o.radius,frame);
       if (o.plateId != null) drawLinkBadgeAtS(cx, cy, o.plateId);
-      else drawGravityBadgeAtS(cx, cy);
+      else if (o.group !== "L" && o.group !== "R") drawGravityBadgeAtS(cx, cy);
       break;
     }
     case "ballast": {
@@ -5287,26 +5366,21 @@ function killCircles(cx,cy,r){
   ctx.beginPath(); ctx.arc(cx,cy,r+30,0,7); ctx.stroke();
 }
 function drawGravityChevron(){
-  const [gx, gy] = gravityVec();
-  const inset = CFG.ARENA_INSET;
-  const L = inset, R = CFG.SCREEN_W - inset, T = inset, B = CFG.SCREEN_H - inset;
-  const edge = gravityFloorEdge();
-  let mx, my;
-  if (edge === "bottom"){ mx = (L+R)/2; my = B; }
-  else if (edge === "top"){ mx = (L+R)/2; my = T; }
-  else if (edge === "right"){ mx = R; my = (T+B)/2; }
-  else { mx = L; my = (T+B)/2; }
-  const px = -gy, py = gx;
-  const tip = 8, half = 5;
-  const tx = mx + gx * tip, ty = my + gy * tip;
-  const bx = mx - gx * 3, by = my - gy * 3;
-  ctx.fillStyle = "rgba(216,129,0,.92)";
-  ctx.beginPath();
-  ctx.moveTo(tx, ty);
-  ctx.lineTo(bx + px*half, by + py*half);
-  ctx.lineTo(bx - px*half, by - py*half);
-  ctx.closePath();
-  ctx.fill();
+  // Standard has no mode mark. Gravityflip draws the plumb.
+  if (activeLevelMode !== "gravityflip") return;
+  // The canvas CSS-rotates with the tilt preview, so a mark drawn at the
+  // top of the bitmap would swing off the window. Place it at the canvas
+  // point that lands on the window's top center after that rotation.
+  // Direction stays gravityVec: the same rotation turns it toward window down.
+  const cx = CFG.SCREEN_W / 2, py = 12;
+  const ox = CFG.SCREEN_W / 2, oy = CFG.SCREEN_H / 2;
+  // CSS rotate(+roll) is clockwise. Invert it so this mark stays at the
+  // window's top center while the level turns under it.
+  const a = -rad(viewRollDeg || 0);
+  const pdx = cx - ox, pdy = py - oy;
+  const px = ox + pdx * Math.cos(a) - pdy * Math.sin(a);
+  const ppy = oy + pdx * Math.sin(a) + pdy * Math.cos(a);
+  drawGravityBadgeAtS(px, ppy);
 }
 function drawGrid(){
   if (!el("ovGrid").checked) return;
@@ -5390,6 +5464,7 @@ function loop(t){
   acc += (t-lastT)/1000; lastT = t;
   if (acc > 0.5) acc = 0.5;
   const stepDt = 1/CFG.FPS;
+  activeLevelMode = levelModeOf(level);
   while (acc >= stepDt){
     acc -= stepDt;
     frame++;
@@ -5497,15 +5572,17 @@ const testKeys = new Set();
 const KEY_CRANK_DEG = 9, KEY_CRANK_FINE = 3;
 
 function isCrankableGrouped(o){
-  // Matches game: plate-driven excluded; deflector needs gravity; sliders always count.
-  if (!CRANKABLE.has(o.type) || o.plateId != null) return false;
-  if (o.type === "deflector") return o.gravity === true;
-  return true;
+  const drive = objectDrive(o);
+  if (!drive) return false;
+  const mode = levelModeOf(level);
+  if (mode === "standard") return drive === "L" || drive === "R";
+  if (mode === "gravityflip") return drive === "gravity";
+  return false;
 }
 function startTest(){
   const crank = level.objects.filter(isCrankableGrouped).length;
   if (crank > 4){
-    alert("Can't test: "+crank+" crankables (deflector + sliding wall + sliding hazard). The game asserts a max of 4.");
+    alert("Can't test: "+crank+" crankables. The game asserts a max of 4 (gravity members, or L/R groups in standard mode).");
     return;
   }
   stopPlay();           // also stops any previous test
@@ -5523,7 +5600,14 @@ function startTest(){
   el("btnTest").innerHTML = "&#9632; Stop test";
   el("btnTest").classList.add("active");
   const unbound = testSim.objects.some(o => o.type === "crawler" && !o.host);
-  el("stMode").innerHTML = "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>tilt</b> gravity &nbsp;<b>&#8593;</b> CLING/FIRE &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit"
+  const testMode = levelModeOf(level);
+  const hasGroups = level.objects.some(o => o.group === "L" || o.group === "R");
+  const testHelp = (testMode === "standard" && hasGroups)
+      ? "TEST — <b>wheel / A D</b> crank &nbsp;<b>&#8592;</b> group L &nbsp;<b>&#8594;</b> group R &nbsp;<b>&#8593;</b> jump &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit"
+      : testMode === "gravityflip"
+      ? "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>tilt</b> gravity &nbsp;<b>&#8593;</b> CLING/FIRE &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit"
+      : "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>&#8593;</b> jump &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit";
+  el("stMode").innerHTML = testHelp
     + (unbound ? " &nbsp;· crawler has no host (wall / moving wall / toggle wall / sliding wall / peg / deflector) — it stays put" : "");
   cv.style.cursor = "default";
   cv.focus && cv.focus();
@@ -5660,7 +5744,8 @@ function drawSim(sim){
   const docked = sim.isDocked() ? ball.dockedLauncher : null;
   for (const obj of sim.objects){
     // Launchers highlight only while docked.
-    const isSelected = obj.type === "launcher" && docked === obj;
+    const isSelected = (obj.type === "launcher" && docked === obj)
+      || ((g.selTarget === "L" || g.selTarget === "R") && obj.group === g.selTarget);
     switch(obj.type){
       case "spawn": drawSpawnAtS(obj.x, obj.y); break;
       case "exit": drawExitAtS(obj.x, obj.y, g.exitUnlocked || (g.keysTotal||0)===0); break;
@@ -5698,7 +5783,7 @@ function drawSim(sim){
         break;
       }
       case "sweeper": drawSweeperAtS(obj.x, obj.y, obj.length, obj.angle); break;
-      case "deflector": drawDeflectorAtS(obj.x, obj.y, obj.length, obj.angle, isSelected, obj.gravity === true); break;
+      case "deflector": drawDeflectorAtS(obj.x, obj.y, obj.length, obj.angle, isSelected, obj.gravity === true, obj.group); break;
       case "sliding_wall": {
         drawSlideRailSim(obj);
         const [cx,cy] = slideCenterOfSim(obj);
@@ -5706,7 +5791,7 @@ function drawSim(sim){
         const plate = sim.objects.find(p => p.type === "pressure_plate" && p.link === obj.plateId);
         drawTriggerReturnClock(obj, cx, cy, plate);
         if (obj.plateDriven && obj.plateId != null) drawLinkBadgeAtS(cx, cy, obj.plateId);
-        else if (!obj.plateDriven) drawGravityBadgeAtS(cx, cy);
+        else if (!obj.plateDriven && obj.group !== "L" && obj.group !== "R") drawGravityBadgeAtS(cx, cy);
         break;
       }
       case "moving_wall": {
@@ -5728,7 +5813,7 @@ function drawSim(sim){
         const plate = sim.objects.find(p => p.type === "pressure_plate" && p.link === obj.plateId);
         drawTriggerReturnClock(obj, cx, cy, plate);
         if (obj.plateDriven && obj.plateId != null) drawLinkBadgeAtS(cx, cy, obj.plateId);
-        else if (!obj.plateDriven) drawGravityBadgeAtS(cx, cy);
+        else if (!obj.plateDriven && obj.group !== "L" && obj.group !== "R") drawGravityBadgeAtS(cx, cy);
         break;
       }
       case "ballast": {
@@ -5944,7 +6029,7 @@ function validate(){
   const errs = [], warns = [], infos = [];
   const objs = level.objects;
   const crank = objs.filter(isCrankableGrouped).length;
-  if (crank > 4) errs.push(`Too many crankables: ${crank} (deflector + sliding wall + sliding hazard must be ≤ 4 — the game asserts).`);
+  if (crank > 4) errs.push(`Too many crankables: ${crank} (gravity members, or L/R groups in standard mode, must be ≤ 4 — the game asserts).`);
   const spawns = objs.filter(o=>o.type==="spawn").length;
   if (spawns !== 1) errs.push(spawns===0 ? "No spawn — exactly one is required." : `Multiple spawns (${spawns}) — exactly one is required.`);
   const exits = objs.filter(o=>o.type==="exit");
@@ -6259,20 +6344,27 @@ function renderProps(){
   }
   if (ANGLED.has(t))
     box.appendChild(propNum("angle °", "angle", o, {step:15}));
-  if (t === "deflector"){
-    const row = document.createElement("div"); row.className="prop-row";
-    const lab = document.createElement("label"); lab.textContent = "gravity";
-    const inp = document.createElement("input"); inp.type = "checkbox";
-    inp.checked = o.gravity === true;
-    inp.addEventListener("change", ()=>{
+  if (t === "deflector" || ((t === "sliding_wall" || t === "sliding_hazard") && o.plateId == null)){
+    const options = t === "deflector" ? ["none","gravity","L","R"] : ["gravity","L","R"];
+    const current = (o.group === "L" || o.group === "R") ? o.group
+      : (t === "deflector" && o.gravity !== true) ? "none" : "gravity";
+    const row = document.createElement("div"); row.className = "prop-row";
+    const lab = document.createElement("label"); lab.textContent = "drive";
+    row.append(lab, segControl(options, current, (pick)=>{
       stopPlay(); pushUndo();
-      if (inp.checked) o.gravity = true; else delete o.gravity;
+      delete o.group;
+      delete o.gravity;
+      if (pick === "L" || pick === "R") o.group = pick;
+      else if (pick === "gravity" && t === "deflector") o.gravity = true;
       commit(); renderProps();
-    });
-    row.append(lab, inp);
+    }));
     box.appendChild(row);
-    const hint = document.createElement("div"); hint.className="hint";
-    hint.textContent = "on = follows tilt; off = static blade (omit gravity)";
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = current === "L" || current === "R"
+      ? "standard: " + current + " selects this. the crank moves the whole group"
+      : current === "gravity"
+      ? "gravity mode: follows device tilt"
+      : "static blade. not moved by tilt or the crank";
     box.appendChild(hint);
   }
   if (t === "pressure_plate"){
@@ -6658,8 +6750,20 @@ window.addEventListener("keydown", e=>{
   if (testing && testSim){
     if (e.key === "Shift"){ testKeys.add("Shift"); return; }
     switch(e.key){
-      case "ArrowLeft": case "ArrowRight":
-        e.preventDefault(); testKeys.add(e.key); return;
+      case "ArrowLeft":
+        e.preventDefault();
+        if (levelModeOf(level) === "standard" && level.objects.some(o => o.group === "L")){
+          if (!e.repeat) testSim.selectGroup("L");
+          return;
+        }
+        testKeys.add("ArrowLeft"); return;
+      case "ArrowRight":
+        e.preventDefault();
+        if (levelModeOf(level) === "standard" && level.objects.some(o => o.group === "R")){
+          if (!e.repeat) testSim.selectGroup("R");
+          return;
+        }
+        testKeys.add("ArrowRight"); return;
       case "a": case "d": case "A": case "D":
         e.preventDefault(); testKeys.add(e.key.toLowerCase()); return;
       case "ArrowUp": case " ":
@@ -6712,6 +6816,15 @@ window.addEventListener("keydown", e=>{
 });
 
 /* ---------- level meta panel ---------- */
+function syncModeChrome(){
+  activeLevelMode = levelModeOf(level);
+  const on = activeLevelMode === "gravityflip";
+  const slider = el("tiltSlider");
+  if (slider) slider.disabled = !on;
+  const ctl = document.querySelector(".tilt-ctl");
+  if (ctl) ctl.style.opacity = on ? "" : "0.45";
+  if (!on && viewRollDeg !== 0) setViewRollDeg(0);
+}
 function syncLevelPanel(){
   el("lvName").value = level.name || "";
   el("lvTutorial").value = level.tutorial || "";
@@ -6721,6 +6834,21 @@ function syncLevelPanel(){
   el("bdBottom").value = borders.bottom;
   el("bdLeft").value = borders.left;
   el("bdRight").value = borders.right;
+  const sel = el("lvMode");
+  if (sel){
+    const raw = levelModeOf(level);
+    for (const opt of [...sel.options]){
+      if (opt.value !== "standard" && opt.value !== "gravityflip") opt.remove();
+    }
+    if (raw !== "standard" && raw !== "gravityflip"){
+      const extra = document.createElement("option");
+      extra.value = raw;
+      extra.textContent = raw;
+      sel.appendChild(extra);
+    }
+    sel.value = raw;
+  }
+  syncModeChrome();
 }
 function bindMeta(id, key){
   el(id).addEventListener("change", ()=>{
@@ -6730,6 +6858,16 @@ function bindMeta(id, key){
   });
 }
 bindMeta("lvName","name"); bindMeta("lvTutorial","tutorial");
+el("lvMode").addEventListener("change", ()=>{
+  pushUndo();
+  const v = el("lvMode").value;
+  // gravityflip is the omitted default. Legacy names collapse onto the new ones.
+  if (v === "gravityflip" || v === "gravity") delete level.mode;
+  else if (v === "nogravity" || v === "crank") level.mode = "standard";
+  else level.mode = v;
+  syncModeChrome();
+  commit();
+});
 function bindBorderEdge(id, edge){
   el(id).addEventListener("change", ()=>{
     pushUndo();
@@ -6904,6 +7042,9 @@ el("btnImportShare").addEventListener("click", ()=>{
       objects: lv.objects || [],
     };
     if (lv.par_frames != null) level.par_frames = lv.par_frames;
+    if (typeof lv.mode === "string" && lv.mode !== "" && lv.mode !== "gravity" && lv.mode !== "gravityflip"){
+      level.mode = (lv.mode === "nogravity" || lv.mode === "crank") ? "standard" : lv.mode;
+    }
     selIdx = -1;
     provenClearFrames = null;
     syncLevelPanel(); commit();
