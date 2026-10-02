@@ -48,6 +48,13 @@
   header .border-edges{gap:4px}
   header .edge-tgl{display:inline-flex; align-items:center; gap:2px; color:#cfcfcf}
   header .edge-tgl select{width:auto; padding:2px 4px; font-size:11px}
+  header .world-ctl{gap:3px}
+  header .world-ctl input[type=number]{
+    width:58px; background:#111; color:#eee; border:1px solid #444; padding:3px 4px;
+    font-family:var(--mono); font-size:12px;
+  }
+  header .world-ctl input.bad{border-color:var(--err); color:#ff8a8a}
+  header .world-err{color:#ff8a8a; font-size:11px; white-space:normal; max-width:220px}
   .spacer{flex:1}
   button{
     font-family:var(--mono); font-size:12px; cursor:pointer;
@@ -168,11 +175,16 @@
     <span class="edge-tgl">R <select id="bdRight"><option value="full">full</option><option value="open">open</option><option value="spikes">spikes</option></select></span>
   </label>
   <label>tutorial <input id="lvTutorial" type="text" placeholder="(optional hint)"></label>
-  <label title="Level mode. standard keeps down fixed and selects L/R groups. gravityflip follows the device.">mode
+  <label title="Level mode. standard (the default) keeps down fixed and selects L/R groups. gravityflip follows the device. scrollingworld is standard in a world bigger than the screen; the camera follows the ball.">mode
     <select id="lvMode">
       <option value="standard">standard</option>
       <option value="gravityflip">gravityflip</option>
+      <option value="scrollingworld">scrollingworld</option>
     </select>
+  </label>
+  <label id="worldCtl" class="world-ctl" title="World size in pixels (scrollingworld only). W 400–2000, H 240–1200, integers. Positions stay centre-origin around the world centre.">world
+    <input id="lvWorldW" type="number" min="400" max="2000" step="1" value="400">&times;<input id="lvWorldH" type="number" min="240" max="1200" step="1" value="240">
+    <span id="worldErr" class="world-err"></span>
   </label>
   <div class="spacer"></div>
   <label>load <select id="lvLoad"><option value="">— campaign level —</option></select></label>
@@ -267,6 +279,8 @@ const CFG = {
   SCREEN_W: 400,
   SCREEN_H: 240,
   FPS: 30,
+  WORLD_MAX_W: 2000,
+  WORLD_MAX_H: 1200,
   WALL_LINE_WIDTH: 5,
   ARENA_INSET: 20,
   BAR_WIDTH: 15,  // sliding_wall body
@@ -313,7 +327,7 @@ const CFG = {
   PLATE_TRIGGER_HOLD_FRAMES: 60,
   PLATE_TRIGGER_WARN_FRAMES: 15,
   PLATE_TRIGGER_CLOCK_R: 8,
-  BALLAST_RADIUS: 8,
+  BALLAST_RADIUS: 10,
 
   // Accelerometer / gravity remap (editor tilt slider).
   ACCEL_SLIDER_GRAVITY: 0.45,
@@ -327,9 +341,59 @@ const CFG = {
 const ARENA = {L:-180, R:180, B:-100, T:100}; // center-origin extents
 const ARENA_EDGE_NAMES = ["top","right","bottom","left"];
 
-/* coords.lua: toScreen / toCenter */
-function toScreen(x,y){ return [x+200, 120-y]; }
-function toCenter(sx,sy){ return [sx-200, 120-sy]; }
+/* ---------------- level mode + world size (main.lua LEVEL_MODES / worldSize) ---------------- */
+// Omitted, empty, and unknown modes are standard. Legacy "gravity" is
+// gravityflip; legacy "nogravity" / "crank" are standard (main.lua loadLevel).
+const LEVEL_MODE_SPECS = {
+  gravityflip:    { scroll:false },
+  standard:       { scroll:false },
+  scrollingworld: { scroll:true },
+};
+function levelModeOf(lv){
+  const m = lv && lv.mode;
+  if (m === "gravity") return "gravityflip";
+  if (typeof m === "string" && LEVEL_MODE_SPECS[m]) return m;
+  return "standard";
+}
+/** level_verify.worldError: nil (null) when world = {w,h} is integers in range. */
+function worldError(world){
+  const minW = CFG.SCREEN_W, minH = CFG.SCREEN_H;
+  const maxW = CFG.WORLD_MAX_W, maxH = CFG.WORLD_MAX_H;
+  if (!world || typeof world !== "object") return "world must be a table { w = <int>, h = <int> }";
+  const w = world.w, h = world.h;
+  if (!Number.isInteger(w) || !Number.isInteger(h))
+    return `world w/h must be integers (got ${w}x${h})`;
+  if (w < minW || h < minH) return `world ${w}x${h} is smaller than the ${minW}x${minH} screen`;
+  if (w > maxW || h > maxH) return `world ${w}x${h} exceeds the ${maxW}x${maxH} maximum`;
+  return null;
+}
+/** game.worldSize() for a level: world w/h only when the mode scrolls and
+    `world` is valid. The game asserts on an invalid world; the editor shows
+    the error (validate) and falls back to the screen so it keeps drawing. */
+function worldSizeOf(lv){
+  if (LEVEL_MODE_SPECS[levelModeOf(lv)].scroll && lv && lv.world != null
+      && worldError(lv.world) == null){
+    return [lv.world.w, lv.world.h];
+  }
+  return [CFG.SCREEN_W, CFG.SCREEN_H];
+}
+
+/* coords.lua: toScreen / toCenter around the WORLD centre (coords.setWorld).
+   Every level load (editor level change, sim create) calls setWorld first. */
+let WORLD_W = 400, WORLD_H = 240;
+function setWorld(w, h){ WORLD_W = w; WORLD_H = h; }
+/** The `world` a level exports (Lua and share code): only for a scrolling
+    mode, only when it differs from 400x240. An invalid world is still
+    written as authored so the error is not silently dropped. */
+function exportWorldOf(lv){
+  if (!LEVEL_MODE_SPECS[levelModeOf(lv)].scroll) return null;
+  const w = lv && lv.world;
+  if (!w || typeof w !== "object") return null;
+  if (w.w === CFG.SCREEN_W && w.h === CFG.SCREEN_H) return null;
+  return {w: w.w, h: w.h};
+}
+function toScreen(x,y){ return [x+WORLD_W/2, WORLD_H/2-y]; }
+function toCenter(sx,sy){ return [sx-WORLD_W/2, WORLD_H/2-sy]; }
 const rad = d => d*Math.PI/180;
 // Launcher aim is authored Y-up; negate for screen draw/sim (coords.lua).
 function launcherScreenAngle(authored){
@@ -457,7 +521,7 @@ function newObject(type, x, y){
     case "pressure_plate":
       o.length = 40; o.angle = 0; o.link = 1; o.mode = "hold"; break;
     case "ballast":
-      o.radius = CFG.BALLAST_RADIUS || 8; o.slideAngle = 0;
+      o.radius = CFG.BALLAST_RADIUS || 10; o.slideAngle = 0;
       o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5; break;
     case "crawler":
       o.radius = CFG.CRAWLER_RADIUS_DEFAULT; o.direction = 1;
@@ -550,7 +614,7 @@ const EXPORT_SPEC = {
   moving_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","speed"]},
   sliding_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"]},
   pressure_plate:{l1:["x","y","length","angle"], l2:["link","mode","holdFrames"]},
-  ballast:      {l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition"]},
+  ballast:      {l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","group"]},
   crawler:      {l1:["x","y","radius"], l2:["direction","startPosition","speed","mode"]},
   text:         {l1:["x","y"], l2:["text","align","angle","near","far"]},
 };
@@ -575,9 +639,16 @@ function exportLevel(level){
   const borders = resolveArenaBorders(level);
   const borderLua = `borders = { top = ${luaStr(borders.top)}, bottom = ${luaStr(borders.bottom)}, left = ${luaStr(borders.left)}, right = ${luaStr(borders.right)} }`;
   let head = `  { name = ${luaStr(level.name||"Untitled")}, ${borderLua},`;
-  const mode = (level.mode === "nogravity" || level.mode === "crank") ? "standard" : level.mode;
-  if (typeof mode === "string" && mode !== "" && mode !== "gravityflip" && mode !== "gravity"){
+  // Same rule as the codec: standard is the default and drops out; every
+  // other mode is written by name. world only for a scrolling mode, and
+  // only when it is not the 400x240 screen.
+  const mode = levelModeOf(level);
+  if (mode !== "standard"){
     head += ` mode = ${luaStr(mode)},`;
+  }
+  const world = exportWorldOf(level);
+  if (world){
+    head += ` world = { w = ${fmtNum(world.w)}, h = ${fmtNum(world.h)} },`;
   }
   const hasTutorial = level.tutorial && String(level.tutorial).trim() !== "";
   if (hasTutorial){
@@ -760,7 +831,7 @@ const KNOWN_KEYS = {
   moving_wall:["x","y","length","angle","slideAngle","slideRange","objectPosition","speed"],
   moving_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","speed"],
   sliding_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"],
-  ballast:["x","y","radius","slideAngle","slideRange","objectPosition"],
+  ballast:["x","y","radius","slideAngle","slideRange","objectPosition","group"],
   pressure_plate:["x","y","length","angle","link","mode","holdFrames"],
   crawler:["x","y","radius","direction","startPosition","speed","mode"],
   text:["x","y","text","align","near","far","angle"],
@@ -790,7 +861,7 @@ const LEVEL_CODEC = {
   moving_wall:["x","y","length","angle","slideAngle","slideRange","objectPosition","speed"],
   moving_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","speed"],
   sliding_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"],
-  ballast:["x","y","radius","slideAngle","slideRange","objectPosition"],
+  ballast:["x","y","radius","slideAngle","slideRange","objectPosition","group"],
   pressure_plate:["x","y","length","angle","link","mode","holdFrames"],
   crawler:["x","y","radius","direction","startPosition","speed","mode"],
   text:["x","y","text","align","near","far","angle"],
@@ -847,7 +918,7 @@ const LEVEL_CODEC = {
   moving_wall:{length:70,angle:0,slideAngle:0,slideRange:60,objectPosition:0.5,speed:0.008},
   moving_hazard:{radius:15,slideAngle:0,slideRange:60,objectPosition:0.5,speed:0.008},
   sliding_hazard:{radius:15,slideAngle:0,slideRange:60,objectPosition:0.5},
-  ballast:{radius:8,slideAngle:0,slideRange:60,objectPosition:0.5},
+  ballast:{radius:10,slideAngle:0,slideRange:60,objectPosition:0.5},
   pressure_plate:{length:40,angle:0,link:1,mode:"hold",holdFrames:60},
   crawler:{radius:10,direction:1,startPosition:0,speed:"M",mode:"patrol"},
   text:{text:"Hint text",angle:0},
@@ -859,6 +930,9 @@ const LEVEL_CODEC = {
   BORDER_ORDER: ["top","bottom","left","right"],
   BORDER_TO_CHAR: {full:"f",spikes:"s",open:"o"},
   CHAR_TO_BORDER: {f:"full",s:"spikes",o:"open"},
+  LEVEL_MODES: new Set(["gravityflip","scrollingworld","standard"]),
+  DEFAULT_LEVEL_MODE: "standard",
+  DEFAULT_WORLD: {w:400,h:240},
 
   escape(s){
     s = String(s);
@@ -1026,13 +1100,22 @@ const LEVEL_CODEC = {
     if (typeof par === "number" && isFinite(par) && par >= 0){
       parts.push("par=" + this.fmtNum(par));
     }
-    const mode = (level.mode === "nogravity" || level.mode === "crank") ? "standard" : level.mode;
-    if (typeof mode === "string" && mode !== "" && mode !== "gravityflip" && mode !== "gravity"){
+    // Legacy names: "gravity" is written as gravityflip; "nogravity" /
+    // "crank" are standard, the default, so they drop out.
+    let mode = level.mode;
+    if (mode === "gravity") mode = "gravityflip";
+    else if (mode === "nogravity" || mode === "crank") mode = this.DEFAULT_LEVEL_MODE;
+    if (typeof mode === "string" && mode !== "" && mode !== this.DEFAULT_LEVEL_MODE){
       parts.push("mode=" + this.escape(mode));
+    }
+    const world = level.world;
+    if (world && typeof world.w === "number" && typeof world.h === "number"
+        && (world.w !== this.DEFAULT_WORLD.w || world.h !== this.DEFAULT_WORLD.h)){
+      parts.push("world=" + this.fmtNum(world.w) + "x" + this.fmtNum(world.h));
     }
     if (level._extras){
       for (const [k,v] of Object.entries(level._extras)){
-        if (k === "tutorial" || k === "par" || k === "mode") continue;
+        if (k === "tutorial" || k === "par" || k === "mode" || k === "world") continue;
         parts.push(this.escape(k) + "=" + this.escape(v));
       }
     }
@@ -1052,6 +1135,10 @@ const LEVEL_CODEC = {
         if (Number.isFinite(n)) out.par_frames = n;
       } else if (k === "mode"){
         if (v !== "") out.mode = v;
+      } else if (k === "world"){
+        // WxH, both integers. Anything else is dropped (the level plays 400x240).
+        const m = /^(\d+)x(\d+)$/.exec(v);
+        if (m) out.world = {w: Number(m[1]), h: Number(m[2])};
       } else {
         out._extras = out._extras || {};
         out._extras[k] = v;
@@ -1112,6 +1199,7 @@ const LEVEL_CODEC = {
       if (extras.tutorial) level.tutorial = extras.tutorial;
       if (extras.par_frames != null) level.par_frames = extras.par_frames;
       if (extras.mode) level.mode = extras.mode;
+      if (extras.world) level.world = extras.world;
       if (extras._extras) level._extras = extras._extras;
     }
     return {ok:true, level};
@@ -1143,8 +1231,17 @@ function importLevelFromLua(text){
     borders: defaultBorders(),
     objects: [],
   };
-  if (typeof lt.map.mode === "string" && lt.map.mode !== "" && lt.map.mode !== "gravity" && lt.map.mode !== "gravityflip"){
-    level.mode = (lt.map.mode === "nogravity" || lt.map.mode === "crank") ? "standard" : lt.map.mode;
+  // Omitted / empty / unknown → standard; legacy names collapse (levelModeOf).
+  level.mode = levelModeOf({mode: lt.map.mode});
+  if (typeof lt.map.mode === "string" && lt.map.mode !== "" && lt.map.mode !== level.mode
+      && lt.map.mode !== "gravity" && lt.map.mode !== "nogravity" && lt.map.mode !== "crank"){
+    notes.push(`Unknown mode "${lt.map.mode}" plays as standard.`);
+  }
+  if (lt.map.world && lt.map.world.__table){
+    const wm = lt.map.world.map;
+    level.world = {w: Number(wm.w), h: Number(wm.h)};
+  } else if (lt.map.world !== undefined){
+    notes.push("Dropped a non-table world field.");
   }
   if (lt.map.keysRequired !== undefined){
     notes.push("Dropped level keysRequired (key count is derived from key objects).");
@@ -1266,7 +1363,7 @@ function importLevelFromLua(text){
       delete o.gravity;
       if (o._extra) delete o._extra.group;
     }
-    if (type === "sliding_wall" || type === "sliding_hazard"){
+    if (type === "sliding_wall" || type === "sliding_hazard" || type === "ballast"){
       if (o.group !== "L" && o.group !== "R") delete o.group;
       if (o._extra) delete o._extra.group;
     }
@@ -1284,7 +1381,7 @@ function importLevelFromLua(text){
 }
 
 /* ---------- built-in level library (verbatim from levels.lua) ---------- */
-const BUILTIN_LEVELS = [{"n":1,"name":"First Roll","lua":"{ name = \"First Roll\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"text\", x = 0, y = 64, text = \"Crank = ROLL\" },\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"key\", x = 0, y = -100 },\n    { type = \"key\", x = 180, y = 0 },\n    { type = \"key\", x = 0, y = 100 },\n    { type = \"exit\", x = -180, y = 60 },\n  }}"},{"n":2,"name":"Step Down","lua":"{ name = \"Step Down\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 0, y = 64, text = \"Down = DROP\" },\n    { type = \"spawn\", x = -150, y = 70 },\n    { type = \"deflector\", x = -100, y = 70, length = 100, angle = 0 },\n    { type = \"deflector\", x = 0, y = 0, length = 140, angle = 0 },\n    { type = \"deflector\", x = 100, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -60, y = 80 },\n    { type = \"key\", x = 0, y = 10 },\n    { type = \"key\", x = 65, y = -60 },\n    { type = \"exit\", x = 140, y = -70 },\n  }}"},{"n":3,"name":"Step Up","lua":"{ name = \"Step Up\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 0, y = 64, text = \"Up = JUMP\" },\n    { type = \"spawn\", x = -140, y = -50 },\n    { type = \"wall\", x = 0, y = 0, length = 140, angle = 0, width = 15 },\n    { type = \"wall\", x = -100, y = -65, length = 100, angle = 0, width = 15 },\n    { type = \"wall\", x = 100, y = 65, length = 100, angle = 0, width = 15 },\n    { type = \"key\", x = -60, y = -50 },\n    { type = \"key\", x = 0, y = 15 },\n    { type = \"key\", x = 60, y = 80 },\n    { type = \"exit\", x = 140, y = 75 },\n  }}"},{"n":4,"name":"Moving Pictures","lua":"{ name = \"Moving Pictures\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -140, y = -70 },\n    { type = \"deflector\", x = -135, y = -70, length = 60, angle = 0 },\n    { type = \"deflector\", x = 140, y = -60, length = 60, angle = 0 },\n    { type = \"deflector\", x = 140, y = -100, length = 60, angle = 0 },\n    { type = \"deflector\", x = 140, y = -20, length = 60, angle = 0 },\n    { type = \"deflector\", x = 140, y = 20, length = 60, angle = 0 },\n    { type = \"deflector\", x = 140, y = 60, length = 60, angle = 0 },\n    { type = \"key\", x = -100, y = 60 },\n    { type = \"key\", x = -30, y = 0 },\n    { type = \"key\", x = 140, y = -50 },\n    { type = \"exit\", x = 140, y = 70 },\n    { type = \"moving_wall\", x = -70, y = -10, length = 70, angle = 0, slideAngle = 0, slideRange = 60, objectPosition = 1.0, speed = 0.008 },\n    { type = \"moving_wall\", x = -70, y = 50, length = 70, angle = 0, slideAngle = 0, slideRange = 60, objectPosition = 0.0, speed = 0.008 },\n  }}"},{"n":5,"name":"Polka Dots","lua":"{ name = \"Polka Dots\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -135, y = 90 },\n    { type = \"key\", x = 60, y = 90 },\n    { type = \"key\", x = -170, y = -75 },\n    { type = \"key\", x = 160, y = -85 },\n    { type = \"exit\", x = 165, y = 75 },\n    { type = \"peg\", x = -135, y = 45, radius = 40 },\n    { type = \"peg\", x = -30, y = 35, radius = 20 },\n    { type = \"peg\", x = 165, y = 45, radius = 20 },\n    { type = \"peg\", x = -170, y = -45, radius = 20 },\n    { type = \"peg\", x = 20, y = -40, radius = 20 },\n    { type = \"peg\", x = -70, y = -50, radius = 40 },\n    { type = \"peg\", x = 60, y = 40, radius = 40 },\n    { type = \"peg\", x = 125, y = -50, radius = 40 },\n  }}"},{"n":6,"name":"Fling","lua":"{ name = \"Fling\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -150, y = 35 },\n    { type = \"key\", x = 0, y = -50 },\n    { type = \"exit\", x = 150, y = 65 },\n    { type = \"deflector\", x = 0, y = -60, length = 140, angle = 0, group = \"L\" },\n    { type = \"deflector\", x = -150, y = 30, length = 70, angle = 0 },\n    { type = \"wall\", x = 150, y = 50, length = 70, angle = 0, width = 15 },\n  }}"},{"n":7,"name":"Weeble Wobble","lua":"{ name = \"Weeble Wobble\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = 25 },\n    { type = \"key\", x = -160, y = -10 },\n    { type = \"key\", x = 160, y = -10 },\n    { type = \"key\", x = 0, y = 30 },\n    { type = \"exit\", x = 150, y = 65 },\n    { type = \"deflector\", x = 0, y = -30, length = 120, angle = 0, group = \"L\" },\n    { type = \"deflector\", x = -160, y = 25, length = 70, angle = 0 },\n    { type = \"deflector\", x = 150, y = -40, length = 70, angle = 330 },\n    { type = \"deflector\", x = -150, y = -40, length = 70, angle = 30 },\n    { type = \"deflector\", x = 150, y = 65, length = 70, angle = 0 },\n  }}"},{"n":8,"name":"Stub 8","lua":"{ name = \"Stub 8\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"},{"n":9,"name":"Stub 9","lua":"{ name = \"Stub 9\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"},{"n":10,"name":"Stub 10","lua":"{ name = \"Stub 10\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"},{"n":11,"name":"Bridge to Somewhere","lua":"{ name = \"Bridge to Somewhere\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 0, y = 64, text = \"Roll the plate. Beat the door.\" },\n    { type = \"spawn\", x = -150, y = 70 },\n    { type = \"deflector\", x = -150, y = 65, length = 50, angle = 0 },\n    { type = \"deflector\", x = 115, y = 15, length = 50, angle = 0 },\n    { type = \"pressure_plate\", x = -150, y = -30, length = 36, angle = 0, link = 1, mode = \"trigger\", holdFrames = 40 },\n    { type = \"sliding_wall\", x = 35, y = -30, length = 60, angle = 0, slideAngle = 0, slideRange = 80, objectPosition = 1.0, plateId = 1, pressedPosition = 0 },\n    { type = \"key\", x = -150, y = 10 },\n    { type = \"key\", x = 0, y = -15 },\n    { type = \"exit\", x = 115, y = 15 },\n  }}"},{"n":12,"name":"Bridge Me","lua":"{ name = \"Bridge Me\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 0, y = 64, text = \"Roll the plate. Beat the door.\" },\n    { type = \"spawn\", x = -150, y = 70 },\n    { type = \"deflector\", x = -150, y = 65, length = 50, angle = 0 },\n    { type = \"deflector\", x = 115, y = 15, length = 50, angle = 0 },\n    { type = \"pressure_plate\", x = -175, y = -30, length = 36, angle = 90, link = 1, mode = \"hold\", holdFrames = 40 },\n    { type = \"sliding_wall\", x = 35, y = -30, length = 60, angle = 0, slideAngle = 0, slideRange = 80, objectPosition = 1.0, plateId = 1, pressedPosition = 0 },\n    { type = \"ballast\", x = -140, y = -30, radius = 8, slideAngle = 0, slideRange = 30, objectPosition = 1.0 },\n    { type = \"key\", x = -150, y = 10 },\n    { type = \"key\", x = 0, y = -15 },\n    { type = \"exit\", x = 115, y = 15 },\n  }}"},{"n":13,"name":"Counterweight","lua":"{ name = \"Counterweight\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -125, y = -70, length = 80, angle = 0 },\n    { type = \"sliding_wall\", x = 0, y = 90, length = 80, angle = 0, slideAngle = 0, slideRange = 120, objectPosition = 1.0, plateId = 1, pressedPosition = 0 },\n    { type = \"deflector\", x = 125, y = -70, length = 80, angle = 0 },\n    { type = \"ballast\", x = 0, y = 20, radius = 8, slideAngle = 0, slideRange = 50, objectPosition = 0.0 },\n    { type = \"pressure_plate\", x = 55, y = 20, length = 28, angle = -90, link = 1, mode = \"hold\" },\n    { type = \"key\", x = -5, y = 75 },\n    { type = \"exit\", x = 160, y = -70 },\n  }}"},{"n":14,"name":"Stub 14","lua":"{ name = \"Stub 14\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"},{"n":15,"name":"Stub 15","lua":"{ name = \"Stub 15\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"},{"n":16,"name":"Hazardous","lua":"{ name = \"Hazardous\", mode = \"gravityflip\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -150, y = -45 },\n    { type = \"key\", x = 0, y = -40 },\n    { type = \"exit\", x = 150, y = -50 },\n    { type = \"deflector\", x = 0, y = -50, length = 320, angle = 0 },\n    { type = \"sliding_hazard\", x = 0, y = 5, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0 },\n    { type = \"text\", x = 0, y = -85, text = \"Hello Friend\", align = \"center\", angle = 180 },\n  }}"},{"n":17,"name":"Moon Landing","lua":"{ name = \"Moon Landing\", mode = \"gravityflip\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 0, y = 40 },\n    { type = \"key\", x = -170, y = 0 },\n    { type = \"key\", x = 170, y = 0 },\n    { type = \"key\", x = 0, y = -95 },\n    { type = \"exit\", x = 0, y = 100 },\n    { type = \"deflector\", x = 0, y = 100, length = 50, angle = 0 },\n    { type = \"deflector\", x = 0, y = -100, length = 100, angle = 0 },\n    { type = \"deflector\", x = 175, y = 0, length = 100, angle = 90 },\n    { type = \"deflector\", x = -175, y = 0, length = 100, angle = 90 },\n    { type = \"peg\", x = 0, y = 0, radius = 40 },\n  }}"},{"n":18,"name":"Meat Grinder","lua":"{ name = \"Meat Grinder\", mode = \"gravityflip\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -140, y = -70 },\n    { type = \"deflector\", x = -140, y = -70, length = 40, angle = 0 },\n    { type = \"deflector\", x = 140, y = -70, length = 40, angle = 0 },\n    { type = \"deflector\", x = -140, y = 50, length = 80, angle = 0, gravity = true },\n    { type = \"pressure_plate\", x = -110, y = 25, length = 24, angle = 0, link = 1, mode = \"hold\" },\n    { type = \"deflector\", x = 140, y = 50, length = 80, angle = 0, gravity = true },\n    { type = \"pressure_plate\", x = 110, y = 25, length = 24, angle = 0, link = 2, mode = \"hold\" },\n    { type = \"key\", x = -140, y = 60 },\n    { type = \"key\", x = 140, y = 60 },\n    { type = \"exit\", x = 140, y = -70 },\n    { type = \"sliding_hazard\", x = -90, y = -10, radius = 25, slideAngle = 0, slideRange = 50, objectPosition = 0.0, plateId = 1, pressedPosition = 1 },\n    { type = \"sliding_hazard\", x = 90, y = -10, radius = 25, slideAngle = 180, slideRange = 50, objectPosition = 0.0, plateId = 1, pressedPosition = 1 },\n    { type = \"sliding_hazard\", x = 0, y = -10, radius = 25, slideAngle = 90, slideRange = 60, objectPosition = 0.0, plateId = 2, pressedPosition = 1 },\n  }}"},{"n":19,"name":"Stub 19","lua":"{ name = \"Stub 19\", mode = \"gravityflip\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"},{"n":20,"name":"Stub 20","lua":"{ name = \"Stub 20\", mode = \"gravityflip\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"}];
+const BUILTIN_LEVELS = [{"n":1,"name":"First Roll","lua":"{ name = \"First Roll\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"text\", x = 0, y = 64, text = \"Crank = ROLL\" },\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"key\", x = 0, y = -100 },\n    { type = \"key\", x = 180, y = 0 },\n    { type = \"key\", x = 0, y = 100 },\n    { type = \"exit\", x = -180, y = 60 },\n  }}"},{"n":2,"name":"Step Down","lua":"{ name = \"Step Down\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 0, y = 64, text = \"Down = DROP\" },\n    { type = \"spawn\", x = -150, y = 70 },\n    { type = \"deflector\", x = -100, y = 70, length = 100, angle = 0 },\n    { type = \"deflector\", x = 0, y = 0, length = 140, angle = 0 },\n    { type = \"deflector\", x = 100, y = -70, length = 100, angle = 0 },\n    { type = \"key\", x = -60, y = 80 },\n    { type = \"key\", x = 0, y = 10 },\n    { type = \"key\", x = 65, y = -60 },\n    { type = \"exit\", x = 140, y = -70 },\n  }}"},{"n":3,"name":"Step Up","lua":"{ name = \"Step Up\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 0, y = 64, text = \"Up = JUMP\" },\n    { type = \"spawn\", x = -140, y = -50 },\n    { type = \"wall\", x = 0, y = 0, length = 140, angle = 0, width = 15 },\n    { type = \"wall\", x = -100, y = -65, length = 100, angle = 0, width = 15 },\n    { type = \"wall\", x = 100, y = 65, length = 100, angle = 0, width = 15 },\n    { type = \"key\", x = -60, y = -50 },\n    { type = \"key\", x = 0, y = 15 },\n    { type = \"key\", x = 60, y = 80 },\n    { type = \"exit\", x = 140, y = 75 },\n  }}"},{"n":4,"name":"Moving Pictures","lua":"{ name = \"Moving Pictures\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -140, y = -70 },\n    { type = \"deflector\", x = -135, y = -70, length = 60, angle = 0 },\n    { type = \"deflector\", x = 140, y = -60, length = 60, angle = 0 },\n    { type = \"deflector\", x = 140, y = -100, length = 60, angle = 0 },\n    { type = \"deflector\", x = 140, y = -20, length = 60, angle = 0 },\n    { type = \"deflector\", x = 140, y = 20, length = 60, angle = 0 },\n    { type = \"deflector\", x = 140, y = 60, length = 60, angle = 0 },\n    { type = \"key\", x = -100, y = 60 },\n    { type = \"key\", x = -30, y = 0 },\n    { type = \"key\", x = 140, y = -50 },\n    { type = \"exit\", x = 140, y = 70 },\n    { type = \"moving_wall\", x = -70, y = -10, length = 70, angle = 0, slideAngle = 0, slideRange = 60, objectPosition = 1.0, speed = 0.008 },\n    { type = \"moving_wall\", x = -70, y = 50, length = 70, angle = 0, slideAngle = 0, slideRange = 60, objectPosition = 0.0, speed = 0.008 },\n  }}"},{"n":5,"name":"Polka Dots","lua":"{ name = \"Polka Dots\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -135, y = 90 },\n    { type = \"key\", x = 60, y = 90 },\n    { type = \"key\", x = -170, y = -75 },\n    { type = \"key\", x = 160, y = -85 },\n    { type = \"exit\", x = 165, y = 75 },\n    { type = \"peg\", x = -135, y = 45, radius = 40 },\n    { type = \"peg\", x = -30, y = 35, radius = 20 },\n    { type = \"peg\", x = 165, y = 45, radius = 20 },\n    { type = \"peg\", x = -170, y = -45, radius = 20 },\n    { type = \"peg\", x = 20, y = -40, radius = 20 },\n    { type = \"peg\", x = -70, y = -50, radius = 40 },\n    { type = \"peg\", x = 60, y = 40, radius = 40 },\n    { type = \"peg\", x = 125, y = -50, radius = 40 },\n  }}"},{"n":6,"name":"Fling","lua":"{ name = \"Fling\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -150, y = 35 },\n    { type = \"key\", x = 0, y = -50 },\n    { type = \"exit\", x = 150, y = 65 },\n    { type = \"deflector\", x = 0, y = -60, length = 140, angle = 0, group = \"L\" },\n    { type = \"deflector\", x = -150, y = 30, length = 70, angle = 0 },\n    { type = \"wall\", x = 150, y = 50, length = 70, angle = 0, width = 15 },\n  }}"},{"n":7,"name":"Weeble Wobble","lua":"{ name = \"Weeble Wobble\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = 25 },\n    { type = \"key\", x = -160, y = -10 },\n    { type = \"key\", x = 160, y = -10 },\n    { type = \"key\", x = 0, y = 30 },\n    { type = \"exit\", x = 150, y = 65 },\n    { type = \"deflector\", x = 0, y = -30, length = 120, angle = 0, group = \"L\" },\n    { type = \"deflector\", x = -160, y = 25, length = 70, angle = 0 },\n    { type = \"deflector\", x = 150, y = -40, length = 70, angle = 330 },\n    { type = \"deflector\", x = -150, y = -40, length = 70, angle = 30 },\n    { type = \"deflector\", x = 150, y = 65, length = 70, angle = 0 },\n  }}"},{"n":8,"name":"Stub 8","lua":"{ name = \"Stub 8\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"},{"n":9,"name":"Stub 9","lua":"{ name = \"Stub 9\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"},{"n":10,"name":"Stub 10","lua":"{ name = \"Stub 10\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"},{"n":11,"name":"Bridge to Somewhere","lua":"{ name = \"Bridge to Somewhere\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 0, y = 64, text = \"Roll the plate. Beat the door.\" },\n    { type = \"spawn\", x = -150, y = 70 },\n    { type = \"deflector\", x = -150, y = 65, length = 50, angle = 0 },\n    { type = \"deflector\", x = 115, y = 15, length = 50, angle = 0 },\n    { type = \"pressure_plate\", x = -150, y = -30, length = 36, angle = 0, link = 1, mode = \"trigger\", holdFrames = 40 },\n    { type = \"sliding_wall\", x = 35, y = -30, length = 60, angle = 0, slideAngle = 0, slideRange = 80, objectPosition = 1.0, plateId = 1, pressedPosition = 0 },\n    { type = \"key\", x = -150, y = 10 },\n    { type = \"key\", x = 0, y = -15 },\n    { type = \"exit\", x = 115, y = 15 },\n  }}"},{"n":12,"name":"Bridge Me","lua":"{ name = \"Bridge Me\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 0, y = 64, text = \"Roll the plate. Beat the door.\" },\n    { type = \"spawn\", x = -150, y = 70 },\n    { type = \"deflector\", x = -150, y = 65, length = 50, angle = 0 },\n    { type = \"deflector\", x = 115, y = 15, length = 50, angle = 0 },\n    { type = \"pressure_plate\", x = -175, y = -30, length = 36, angle = 90, link = 1, mode = \"hold\", holdFrames = 40 },\n    { type = \"sliding_wall\", x = 35, y = -30, length = 60, angle = 0, slideAngle = 0, slideRange = 80, objectPosition = 1.0, plateId = 1, pressedPosition = 0 },\n    { type = \"ballast\", x = -140, y = -30, radius = 10, slideAngle = 0, slideRange = 30, objectPosition = 1.0 },\n    { type = \"key\", x = -150, y = 10 },\n    { type = \"key\", x = 0, y = -15 },\n    { type = \"exit\", x = 115, y = 15 },\n  }}"},{"n":13,"name":"Counterweight","lua":"{ name = \"Counterweight\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -155, y = -70 },\n    { type = \"deflector\", x = -125, y = -70, length = 80, angle = 0 },\n    { type = \"sliding_wall\", x = 0, y = 90, length = 80, angle = 0, slideAngle = 0, slideRange = 120, objectPosition = 1.0, plateId = 1, pressedPosition = 0 },\n    { type = \"deflector\", x = 125, y = -70, length = 80, angle = 0 },\n    { type = \"ballast\", x = 0, y = 20, radius = 10, slideAngle = 0, slideRange = 50, objectPosition = 0.0 },\n    { type = \"pressure_plate\", x = 55, y = 20, length = 28, angle = -90, link = 1, mode = \"hold\" },\n    { type = \"key\", x = -5, y = 75 },\n    { type = \"exit\", x = 160, y = -70 },\n  }}"},{"n":14,"name":"Stub 14","lua":"{ name = \"Stub 14\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"},{"n":15,"name":"Stub 15","lua":"{ name = \"Stub 15\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"},{"n":16,"name":"Hazardous","lua":"{ name = \"Hazardous\", mode = \"gravityflip\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -150, y = -45 },\n    { type = \"key\", x = 0, y = -40 },\n    { type = \"exit\", x = 150, y = -50 },\n    { type = \"deflector\", x = 0, y = -50, length = 320, angle = 0 },\n    { type = \"sliding_hazard\", x = 0, y = 5, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0 },\n    { type = \"text\", x = 0, y = -85, text = \"Hello Friend\", align = \"center\", angle = 180 },\n  }}"},{"n":17,"name":"Moon Landing","lua":"{ name = \"Moon Landing\", mode = \"gravityflip\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 0, y = 40 },\n    { type = \"key\", x = -170, y = 0 },\n    { type = \"key\", x = 170, y = 0 },\n    { type = \"key\", x = 0, y = -95 },\n    { type = \"exit\", x = 0, y = 100 },\n    { type = \"deflector\", x = 0, y = 100, length = 50, angle = 0 },\n    { type = \"deflector\", x = 0, y = -100, length = 100, angle = 0 },\n    { type = \"deflector\", x = 175, y = 0, length = 100, angle = 90 },\n    { type = \"deflector\", x = -175, y = 0, length = 100, angle = 90 },\n    { type = \"peg\", x = 0, y = 0, radius = 40 },\n  }}"},{"n":18,"name":"Meat Grinder","lua":"{ name = \"Meat Grinder\", mode = \"gravityflip\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = -140, y = -70 },\n    { type = \"deflector\", x = -140, y = -70, length = 40, angle = 0 },\n    { type = \"deflector\", x = 140, y = -70, length = 40, angle = 0 },\n    { type = \"deflector\", x = -140, y = 50, length = 80, angle = 0, gravity = true },\n    { type = \"pressure_plate\", x = -110, y = 25, length = 24, angle = 0, link = 1, mode = \"hold\" },\n    { type = \"deflector\", x = 140, y = 50, length = 80, angle = 0, gravity = true },\n    { type = \"pressure_plate\", x = 110, y = 25, length = 24, angle = 0, link = 2, mode = \"hold\" },\n    { type = \"key\", x = -140, y = 60 },\n    { type = \"key\", x = 140, y = 60 },\n    { type = \"exit\", x = 140, y = -70 },\n    { type = \"sliding_hazard\", x = -90, y = -10, radius = 25, slideAngle = 0, slideRange = 50, objectPosition = 0.0, plateId = 1, pressedPosition = 1 },\n    { type = \"sliding_hazard\", x = 90, y = -10, radius = 25, slideAngle = 180, slideRange = 50, objectPosition = 0.0, plateId = 1, pressedPosition = 1 },\n    { type = \"sliding_hazard\", x = 0, y = -10, radius = 25, slideAngle = 90, slideRange = 60, objectPosition = 0.0, plateId = 2, pressedPosition = 1 },\n  }}"},{"n":19,"name":"Stub 19","lua":"{ name = \"Stub 19\", mode = \"gravityflip\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"},{"n":20,"name":"Stub 20","lua":"{ name = \"Stub 20\", mode = \"gravityflip\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = -160, y = -100 },\n    { type = \"exit\", x = 160, y = 0 },\n  }}"}];
 /* =====================================================================
    GAMEPLAY SIMULATION — faithful port of rails.lua + cling_ball.lua +
    the game glue in main.lua. Screen space (Y-down). Rails arrays are
@@ -1361,35 +1458,45 @@ const SIM = {
   PLATE_TRIGGER_HOLD_FRAMES: 60,
   PLATE_TRIGGER_WARN_FRAMES: 15,
   PLATE_TRIGGER_CLOCK_R: 8,
-  BALLAST_RADIUS: 8,
+  BALLAST_RADIUS: 10,
 
   // Gravity-driven sliders (px/frame along the rail).
   ACCEL_SLIDER_GRAVITY: 0.45,
   ACCEL_SLIDER_FRICTION: 0.08,
   ACCEL_SLIDER_DEADZONE: 0.12,
   ACCEL_SLIDER_MAX_SPEED: 8,
+
+  // Scrolling-world follow camera (camera.lua). Test mode only.
+  CAMERA_DEADZONE_HW: 40,
+  CAMERA_DEADZONE_HH: 24,
+  CAMERA_LOOK_FRAMES: 8,
+  CAMERA_LOOK_MAX_X: 48,
+  CAMERA_LOOK_MAX_Y: 32,
+  CAMERA_LOOK_LERP: 0.08,
+  CAMERA_LERP_X: 0.15,
+  CAMERA_LERP_Y: 0.2,
+  CAMERA_EDGE: 32,
 };
 const mod = (a,n)=>{ const r = a % n; return r < 0 ? r + n : r; };
 
 /* ---------------- gravity / tilt (ports of main.lua + entities.lua) ---------------- */
 let viewRollDeg = 0;
-let activeLevelMode = "gravityflip";
-// Omitted and legacy "gravity" are gravityflip. Legacy "nogravity" and "crank" are standard.
-function levelModeOf(lv){
-  const m = lv && lv.mode;
-  if (m === "standard" || m === "nogravity" || m === "crank") return "standard";
-  if (m == null || m === "" || m === "gravity" || m === "gravityflip") return "gravityflip";
-  return m;
-}
+let activeLevelMode = "standard";   // levelModeOf (top of file) normalizes
+/** LEVEL_MODES selectGroups: Left/Right pick L/R crank groups (standard, scrollingworld). */
+function modeSelectsGroups(mode){ return mode === "standard" || mode === "scrollingworld"; }
 function objectDrive(o){
   if (!o || o.plateId != null || o.plateDriven) return null;
-  if (o.type !== "deflector" && o.type !== "sliding_wall" && o.type !== "sliding_hazard") return null;
+  if (o.type !== "deflector" && o.type !== "sliding_wall" && o.type !== "sliding_hazard"
+      && o.type !== "ballast") return null;
   if (o.group === "L" || o.group === "R") return o.group;
   if (o.type === "deflector") return o.gravity === true ? "gravity" : null;
+  // Tilt ballast still slides, but it is not a crankable.
+  if (o.type === "ballast") return null;
   return "gravity";
 }
 let viewDpadSteps = 0;
 let viewScale = 1;   // CSS scale that keeps the rotated frame inside #stage
+let viewUiK = 1;     // handle / pick-radius multiplier for a scaled-down big world
 
 function wrapSignedDeg(d){
   d = Number(d) || 0;
@@ -1488,10 +1595,11 @@ function stepSliderGravity(obj, rollDeg){
   return newPos;
 }
 function followsTilt(o){
-  if (activeLevelMode !== "gravityflip") return false;
   if (!o) return false;
   if (o.plateId != null || o.plateDriven) return false;
+  if (o.group === "L" || o.group === "R") return false;
   if (o.type === "deflector") return o.gravity === true;
+  if (o.type === "ballast") return true;
   return o.type === "sliding_wall" || o.type === "sliding_hazard";
 }
 
@@ -1822,9 +1930,11 @@ function pegRadiusOf(o){
   const r = (typeof o.radius === "number" && isFinite(o.radius)) ? o.radius : CFG.DEFAULT_PEG_RADIUS;
   return Math.max(12, Math.min(100, r));
 }
-function arenaRailS(borders){
+// arena_borders.arenaRailSpec: worldW / worldH omitted means the screen.
+function arenaRailS(borders, worldW, worldH){
   const inset = SIM.ARENA_INSET;
-  const L=inset, R=CFG.SCREEN_W-inset, T=inset, B=CFG.SCREEN_H-inset;
+  const sw = worldW ?? CFG.SCREEN_W, sh = worldH ?? CFG.SCREEN_H;
+  const L=inset, R=sw-inset, T=inset, B=sh-inset;
   borders = borders || defaultBorders();
   if (onlyTopOpen(borders)){
     return {closed:false, pts:[{x:L,y:T},{x:L,y:B},{x:R,y:B},{x:R,y:T}]};
@@ -1934,13 +2044,14 @@ function makeSimObjects(level){
         break;
       }
       case "ballast": {
-        o.radius = a.radius ?? (CFG.BALLAST_RADIUS || 8);
+        o.radius = a.radius ?? (CFG.BALLAST_RADIUS || 10);
         o.slideAngle = a.slideAngle || 0;
         const sp = slideSpan(a);
         o.minSlide = -sp; o.maxSlide = sp;
         o.objectPosition = Math.max(0, Math.min(1, a.objectPosition ?? 0.5));
         o._slideVel = 0;
         o.plateDriven = false;
+        if (a.group === "L" || a.group === "R") o.group = a.group;
         o._cfg = { objectPosition: o.objectPosition };
         break;
       }
@@ -2000,7 +2111,7 @@ function simGetRail(o){
     }
     case "ballast": {
       const r = rad(o.slideAngle||0);
-      return { closed:false, pts:[
+      return { closed:false, noCling:true, pts:[
         {x:o.x+Math.cos(r)*o.minSlide, y:o.y+Math.sin(r)*o.minSlide},
         {x:o.x+Math.cos(r)*o.maxSlide, y:o.y+Math.sin(r)*o.maxSlide},
       ]};
@@ -2086,10 +2197,71 @@ function simGetMouthPos(o){
   return [o.x + Math.cos(a)*SIM.MOUTH_DIST, o.y + Math.sin(a)*SIM.MOUTH_DIST];
 }
 
+/* ---------------- camera (port of camera.lua) ----------------
+   View top-left in world space. In a 400x240 world the clamp range is
+   [0,0]x[0,0], so the view never moves and test mode draws as before. */
+function createCamera(worldW, worldH){
+  const viewW = CFG.SCREEN_W, viewH = CFG.SCREEN_H;
+  const maxX = Math.max(0, (worldW || viewW) - viewW);
+  const maxY = Math.max(0, (worldH || viewH) - viewH);
+  const clamp = (v, lo, hi)=> v < lo ? lo : (v > hi ? hi : v);
+  let x = 0, y = 0, lookX = 0, lookY = 0, prevBx = null, prevBy = null;
+  function snapTargetFor(bx, by){
+    return [clamp(bx - viewW * 0.5, 0, maxX), clamp(by - viewH * 0.5, 0, maxY)];
+  }
+  function snap(bx, by){
+    lookX = 0; lookY = 0;
+    prevBx = bx; prevBy = by;
+    if (bx == null || by == null){ x = 0; y = 0; return; }
+    [x, y] = snapTargetFor(bx, by);
+  }
+  function follow(bx, by){
+    if (maxX === 0 && maxY === 0){ x = 0; y = 0; return; }
+    if (bx == null || by == null) return;
+    let vx = 0, vy = 0;
+    if (prevBx != null){ vx = bx - prevBx; vy = by - prevBy; }
+    prevBx = bx; prevBy = by;
+    const lookFrames = SIM.CAMERA_LOOK_FRAMES, lookLerp = SIM.CAMERA_LOOK_LERP;
+    lookX += (clamp(vx * lookFrames, -SIM.CAMERA_LOOK_MAX_X, SIM.CAMERA_LOOK_MAX_X) - lookX) * lookLerp;
+    lookY += (clamp(vy * lookFrames, -SIM.CAMERA_LOOK_MAX_Y, SIM.CAMERA_LOOK_MAX_Y) - lookY) * lookLerp;
+    // Focus point in view space; move the view only by how far it leaves the box.
+    const fx = bx + lookX - x, fy = by + lookY - y;
+    const hw = SIM.CAMERA_DEADZONE_HW, hh = SIM.CAMERA_DEADZONE_HH;
+    const cx = viewW * 0.5, cy = viewH * 0.5;
+    let tx = x, ty = y;
+    if (fx > cx + hw) tx = x + (fx - (cx + hw));
+    else if (fx < cx - hw) tx = x + (fx - (cx - hw));
+    if (fy > cy + hh) ty = y + (fy - (cy + hh));
+    else if (fy < cy - hh) ty = y + (fy - (cy - hh));
+    tx = clamp(tx, 0, maxX);
+    ty = clamp(ty, 0, maxY);
+    x += (tx - x) * SIM.CAMERA_LERP_X;
+    y += (ty - y) * SIM.CAMERA_LERP_Y;
+    if (Math.abs(tx - x) < 0.05) x = tx;
+    if (Math.abs(ty - y) < 0.05) y = ty;
+    // The ball never sits closer than EDGE to a view edge, whatever the lerp says.
+    const edge = SIM.CAMERA_EDGE;
+    if (bx - x < edge) x = bx - edge;
+    else if (bx - x > viewW - edge) x = bx - (viewW - edge);
+    if (by - y < edge) y = by - edge;
+    else if (by - y > viewH - edge) y = by - (viewH - edge);
+    x = clamp(x, 0, maxX);
+    y = clamp(y, 0, maxY);
+  }
+  // Integer view top-left (camera.offset): the device draws at whole pixels.
+  function offset(){ return [Math.floor(x + 0.5), Math.floor(y + 0.5)]; }
+  function scrolls(){ return maxX > 0 || maxY > 0; }
+  return { snap, follow, offset, snapTargetFor, scrolls };
+}
+
 /* ---------------- createClingSim ---------------- */
 function createClingSim(level){
   const borders = resolveArenaBorders(level);
   const arenaSpikes = spikesFromBorders(borders);
+  // main.lua loadLevel: world size first, then coords.setWorld, so objects
+  // convert around the world centre (makeSimObjects → toScreen).
+  const [worldW, worldH] = worldSizeOf(level);
+  setWorld(worldW, worldH);
 
   const objects = makeSimObjects(level);
   // Key count is derived from objects (never authored). Zero keys = open exit.
@@ -2110,6 +2282,9 @@ function createClingSim(level){
     tutorial: level.tutorial || "",
     levelName: level.name || "",
     levelMode: levelModeOf(level),
+    // game.worldSize(): every gameplay bound reads these; HUD stays 400x240.
+    worldW, worldH,
+    camera: createCamera(worldW, worldH),
     crankGroups: { L: [], R: [] },
     gravityDpad,
     gravityVec,
@@ -2118,8 +2293,8 @@ function createClingSim(level){
   for (const obj of objects){
     const drive = objectDrive(obj);
     if (drive === "L" || drive === "R"){
-      if (game.levelMode === "standard") game.crankGroups[drive].push(obj);
-    } else if (drive === "gravity" && game.levelMode === "gravityflip"){
+      if (modeSelectsGroups(game.levelMode)) game.crankGroups[drive].push(obj);
+    } else if (drive === "gravity"){
       game.tilt.push(obj);
     }
   }
@@ -2346,7 +2521,7 @@ function createClingSim(level){
   const arenaBorders = ()=> game.arenaBorders || defaultBorders();
   function arenaEdgeLengths(){
     const inset = SIM.ARENA_INSET;
-    return [CFG.SCREEN_W - 2*inset, CFG.SCREEN_H - 2*inset];
+    return [game.worldW - 2*inset, game.worldH - 2*inset];
   }
   function arenaEdgeSRange(edge){
     const borders = arenaBorders();
@@ -2380,7 +2555,7 @@ function createClingSim(level){
   function sOnEdgeAt(edge, x, y){
     const [s0, s1] = arenaEdgeSRange(edge);
     if (s0 == null) return null;
-    const spec = arenaRailS(game.arenaBorders);
+    const spec = arenaRailS(game.arenaBorders, game.worldW, game.worldH);
     const order = presentEdgeOrder(game.arenaBorders);
     const segI = order.indexOf(edge);
     if (segI < 0) return null;
@@ -2560,7 +2735,7 @@ function createClingSim(level){
     if (!pinched){
       const inset = SIM.ARENA_INSET, pad = 1;
       if (px < inset - pad || py < inset - pad
-        || px > CFG.SCREEN_W - inset + pad || py > CFG.SCREEN_H - inset + pad){
+        || px > game.worldW - inset + pad || py > game.worldH - inset + pad){
         pinched = true;
       }
     }
@@ -3035,7 +3210,7 @@ function createClingSim(level){
 
     for (let i=1;i<game.rails.length;i++){
       const r = game.rails[i];
-      if (i === ball.rail || isIgnored(i)) continue;
+      if (i === ball.rail || isIgnored(i) || !railAllowsCling(r)) continue;
       if (r.kind === "bar_outline" && railAllowsCling(r)){
         for (const tipSign of [-1,1]){
           const cap = closestOnBarEndCap(r, tipSign, px, py);
@@ -3210,6 +3385,7 @@ function createClingSim(level){
   function die(){
     resetToSpawn();
     ball.respawnFlash = 22;
+    game.camera.snap(...worldPos());   // main.lua snapCamera on respawn
     // Death is a full attempt reset: keys respawn (mirrors game.respawnKeys).
     for (const obj of objects){
       if (obj.type === "key" || obj.type === "coin") obj.collected = false;
@@ -3254,8 +3430,8 @@ function createClingSim(level){
     if (graceThisFrame) ball.flightGrace--;
     const margin = 40;
     integrateWithChecks((prevX, prevY)=>{
-      if (ball.flightX < -margin || ball.flightX > CFG.SCREEN_W + margin
-        || ball.flightY < -margin || ball.flightY > CFG.SCREEN_H + margin){
+      if (ball.flightX < -margin || ball.flightX > game.worldW + margin
+        || ball.flightY < -margin || ball.flightY > game.worldH + margin){
         die(); return true;
       }
       if (!graceThisFrame && tryCatchFlight()) return true;
@@ -3746,7 +3922,7 @@ function createClingSim(level){
   }
   function snapToArenaFloor(){
     const inset = SIM.ARENA_INSET;
-    const W = CFG.SCREEN_W, H = CFG.SCREEN_H;
+    const W = game.worldW, H = game.worldH;
     const L = inset, T = inset, R = W - inset, B = H - inset;
     const edge = gravityFloorEdge();
     const [s0] = arenaEdgeSRange(edge);
@@ -3815,8 +3991,8 @@ function createClingSim(level){
     }
 
     const margin = 40;
-    if (ball.flightX < -margin || ball.flightX > CFG.SCREEN_W + margin
-      || ball.flightY < -margin || ball.flightY > CFG.SCREEN_H + margin){
+    if (ball.flightX < -margin || ball.flightX > game.worldW + margin
+      || ball.flightY < -margin || ball.flightY > game.worldH + margin){
       die(); return;
     }
 
@@ -3837,8 +4013,8 @@ function createClingSim(level){
     const graceThisFrame = ball.flightGrace > 0;
     if (graceThisFrame) ball.flightGrace--;
     integrateWithChecks((prevX, prevY)=>{
-      if (ball.flightX < -margin || ball.flightX > CFG.SCREEN_W + margin
-        || ball.flightY < -margin || ball.flightY > CFG.SCREEN_H + margin){
+      if (ball.flightX < -margin || ball.flightX > game.worldW + margin
+        || ball.flightY < -margin || ball.flightY > game.worldH + margin){
         die(); return true;
       }
       if (spikedArenaKillAt(ball.flightX, ball.flightY)) return true;
@@ -3960,7 +4136,7 @@ function createClingSim(level){
 
   /* -------- game glue (main.lua) -------- */
   function buildRails(){
-    game.rails = [null, arenaRailS(game.arenaBorders)];
+    game.rails = [null, arenaRailS(game.arenaBorders, game.worldW, game.worldH)];
     game.railOwners = [null, null];
     for (const obj of objects){
       const r = simGetRail(obj);
@@ -3968,7 +4144,7 @@ function createClingSim(level){
     }
     const inset = SIM.ARENA_INSET;
     const L = inset, T = inset;
-    const R = CFG.SCREEN_W - inset, B = CFG.SCREEN_H - inset;
+    const R = game.worldW - inset, B = game.worldH - inset;
     const gapTol = SIM.JUNCTION_SNAP;
     const minFrac = SIM.EDGE_SEAL_MIN_OVERLAP ?? 0.5;
     const arena = game.rails[1];
@@ -4262,7 +4438,6 @@ function createClingSim(level){
   }
   function applyAccelToCrankables(){
     if (game.levelComplete) return;
-    if (game.levelMode !== "gravityflip") return;
     const rollDeg = viewRollDeg;
     const members = game.tilt;
     if (members){
@@ -4287,7 +4462,7 @@ function createClingSim(level){
       }
     }
     for (const obj of objects){
-      if (obj.type !== "ballast") continue;
+      if (obj.type !== "ballast" || obj.group === "L" || obj.group === "R") continue;
       const target = stepSliderGravity(obj, rollDeg);
       if (target != null) obj.objectPosition = target;
     }
@@ -4314,7 +4489,7 @@ function createClingSim(level){
       const [newCx, newCy] = simSlideCenter(obj);
       buildRails();
       resolveSolidSweep(obj, newCx - prevCx, newCy - prevCy, true);
-    } else if (obj.type === "sliding_hazard"){
+    } else if (obj.type === "sliding_hazard" || obj.type === "ballast"){
       const span = obj.maxSlide - obj.minSlide;
       if (span <= 0) return;
       obj._slideVel = 0;
@@ -4326,7 +4501,7 @@ function createClingSim(level){
     }
   }
   function selectGroup(side){
-    if (game.levelMode !== "standard") return;
+    if (!modeSelectsGroups(game.levelMode)) return;
     const members = game.crankGroups && game.crankGroups[side];
     if (!members || !members.length) return;
     game.selTarget = (game.selTarget === side) ? "cling" : side;
@@ -4344,40 +4519,6 @@ function createClingSim(level){
       tryJump();
     }
   }
-  function pushBallastFromCrank(){
-    if (ball.mode !== "cling") return;
-    const owner = (game.railOwners || [])[ball.rail];
-    if (!owner || owner.type !== "ballast") return;
-    const span = (owner.maxSlide || 0) - (owner.minSlide || 0);
-    if (span <= 1e-6) return;
-    const prevS = ball.prevS ?? ball.s ?? 0;
-    const ballS = ball.s || 0;
-    const delta = ballS - prevS;
-    if (Math.abs(delta) < 1e-4) return;
-    const contact = (SIM.BALL_RADIUS || 5) + (owner.radius || CFG.BALLAST_RADIUS || 8);
-    const beadS = (owner.objectPosition || 0) * span;
-    let newPos, pinned;
-    if (delta > 0){
-      const limit = beadS - contact;
-      if (!(ballS > limit && prevS <= beadS)) return;
-      newPos = (beadS + (ballS - limit)) / span;
-      if (newPos < (owner.objectPosition || 0)) return;
-    } else {
-      const limit = beadS + contact;
-      if (!(ballS < limit && prevS >= beadS)) return;
-      newPos = (beadS - (limit - ballS)) / span;
-      if (newPos > (owner.objectPosition || 0)) return;
-    }
-    if (newPos < 0) newPos = 0; else if (newPos > 1) newPos = 1;
-    owner.objectPosition = newPos;
-    owner._slideVel = 0;
-    pinned = delta > 0 ? newPos * span - contact : newPos * span + contact;
-    const rail = game.rails[ball.rail];
-    const len = rail ? RL.length(rail) : span;
-    if (pinned < 0) pinned = 0;
-    if (pinned > len) pinned = len;
-    ball.s = pinned;
-  }
   function handleCrank(change){
     if (Math.abs(change) <= 0.1) return;
     if (game.levelComplete) return;
@@ -4385,7 +4526,7 @@ function createClingSim(level){
       const launcher = ball.dockedLauncher;
       if (launcher){ applyCrankToObject(launcher, change); return; }
     }
-    if (game.levelMode === "standard" && (game.selTarget === "L" || game.selTarget === "R")){
+    if (modeSelectsGroups(game.levelMode) && (game.selTarget === "L" || game.selTarget === "R")){
       const members = (game.crankGroups && game.crankGroups[game.selTarget]) || [];
       for (const obj of members) applyCrankToObject(obj, change);
       return;
@@ -4396,7 +4537,6 @@ function createClingSim(level){
       return;
     }
     crank(change);
-    pushBallastFromCrank();
   }
   function restartLevel(){
     for (const obj of objects){
@@ -4439,6 +4579,7 @@ function createClingSim(level){
     bindCrawlerHosts();
     resetToSpawn();
     game.selTarget = "cling";
+    game.camera.snap(...worldPos());   // main.lua snapCamera on restart
   }
   function projectSpawnOntoRails(spawn){
     let bestRail = 1, bestS = 0, bestD = Infinity;
@@ -4519,9 +4660,10 @@ function createClingSim(level){
   if (spawnObj) projectSpawnOntoRails(spawnObj);
   else {
     const inset = SIM.ARENA_INSET;
-    const cp = RL.closestPoint(game.rails[1], inset + 40, CFG.SCREEN_H - inset);
+    const cp = RL.closestPoint(game.rails[1], inset + 40, game.worldH - inset);
     setSpawn(1, cp.s);
   }
+  game.camera.snap(...worldPos());     // main.lua snapCamera at level load
 
   return {
     game, ball, objects, keysTotal,
@@ -4539,7 +4681,8 @@ if (typeof module !== "undefined" && module.exports){
   module.exports = {
     exportLevel, importLevelFromLua, parseLuaText, slideBodyScreen, barEndpointsScreen,
     encodeShareCode, decodeShareCode, LEVEL_CODEC,
-    toScreen, toCenter, newObject, CFG, SIM, RL, createClingSim,
+    toScreen, toCenter, setWorld, newObject, CFG, SIM, RL, createClingSim, createCamera,
+    levelModeOf, worldError, worldSizeOf, exportWorldOf,
     gravityVec, gravityDpad, sliderRailGravity, stepSliderGravity, setViewRollDeg, followsTilt,
     makeBarOutlineRailS, makeOpenRailS, arenaRailS,
     resolveArenaBorders, spikesFromBorders, defaultBorders, migrateLegacyBorders,
@@ -4868,7 +5011,17 @@ function drawGravityBadgeAtS(cx, cy){
   ctx.strokeStyle = INK; ctx.lineWidth = 1;
   ctx.beginPath(); ctx.arc(cx, cy, 7, 0, 7); ctx.stroke();
   ctx.fillStyle = INK;
-  ctx.beginPath(); ctx.arc(cx + gx * 3.5, cy + gy * 3.5, 2, 0, 7); ctx.fill();
+  ctx.beginPath(); ctx.arc(cx + gx * 3, cy + gy * 3, 2, 0, 7); ctx.fill();
+}
+function drawBallastDriveBadge(cx, cy, group){
+  // Same plumb as a deflector (white 6, bob radius 2). Black disc and
+  // thin ring sit 2px and 4px outside that hub.
+  ctx.strokeStyle = "#fff"; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx, cy, 10, 0, 7); ctx.stroke();
+  ctx.fillStyle = INK;
+  ctx.beginPath(); ctx.arc(cx, cy, 8, 0, 7); ctx.fill();
+  if (group === "L" || group === "R") drawGroupArrowBadgeAtS(cx, cy, group);
+  else drawGravityBadgeAtS(cx, cy);
 }
 function drawGroupArrowBadgeAtS(cx, cy, group){
   // Same hub disc as the plumb. Triangle matches the d-pad up/down glyph.
@@ -5108,8 +5261,9 @@ function drawSpikeStrip(ax, ay, bx, by, inwardX, inwardY, fc){
   }
 }
 function drawArena(borders){
+  // main.lua drawArenaOutline: inset from the WORLD edges (game.worldSize).
   const inset = CFG.ARENA_INSET;
-  const L=inset, R=CFG.SCREEN_W-inset, T=inset, B=CFG.SCREEN_H-inset;
+  const L=inset, R=WORLD_W-inset, T=inset, B=WORLD_H-inset;
   borders = borders || defaultBorders();
   ctx.strokeStyle = dither(0.35); ctx.lineWidth = 1;
   ctx.beginPath();
@@ -5187,13 +5341,7 @@ function drawObject(o,i){
     case "ballast": {
       drawSlideRailFor(o);
       const [cx,cy]=slideBodyScreen(o,effPos(o,i));
-      const r = o.radius || CFG.BALLAST_RADIUS || 8;
-      ctx.fillStyle = INK;
-      ctx.beginPath(); ctx.arc(cx,cy,r,0,7); ctx.fill();
-      ctx.fillStyle = "#fff";
-      ctx.beginPath(); ctx.arc(cx,cy,Math.max(1,r*0.35),0,7); ctx.fill();
-      ctx.strokeStyle = INK; ctx.lineWidth = 1;
-      ctx.beginPath(); ctx.arc(cx,cy,r,0,7); ctx.stroke();
+      drawBallastDriveBadge(cx, cy, o.group);
       break;
     }
     case "pressure_plate": drawPressurePlate(o,i); break;
@@ -5237,11 +5385,13 @@ function drawObject(o,i){
 
 /* ---------- editor overlays ---------- */
 /** In-game TA HUD guide: live time top-left, PB top-right (mirrors main.lua). */
-function drawTimeHudGuide(){
+function drawTimeHudGuide(viewX, viewY){
   if (!el("ovHud").checked) return;
   const margin = 8;
   const clockY = 1;
   ctx.save();
+  // HUD is screen space (400x240). In the editor it sits on the starting view.
+  ctx.translate(viewX || 0, viewY || 0);
   ctx.fillStyle = "rgba(0,0,0,.55)";
   ctx.font = "9px ui-monospace, Menlo, Consolas, monospace";
   ctx.textBaseline = "top";
@@ -5254,7 +5404,7 @@ function drawTimeHudGuide(){
 function objectReach(o){
   if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard") return (o.radius||14)+5;
   if (o.type==="crawler") return (o.radius||CFG.CRAWLER_RADIUS_DEFAULT||9)+5;
-  if (o.type==="ballast") return (o.radius||CFG.BALLAST_RADIUS||8);
+  if (o.type==="ballast") return (o.radius||CFG.BALLAST_RADIUS||10);
   if (o.type==="deflector") return o.length/2 + 8;
   if (o.type==="wall") return o.length/2 + wallBodyWidth(o)/2;
   if (o.type==="peg") return pegRadiusOf(o);
@@ -5387,11 +5537,13 @@ function drawGrid(){
   ctx.save();
   ctx.strokeStyle = "rgba(0,0,0,.07)";
   ctx.lineWidth = 0.5;
-  for (let x=0;x<=400;x+=20){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,240); ctx.stroke(); }
-  for (let y=0;y<=240;y+=20){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(400,y); ctx.stroke(); }
+  // Lines on multiples of 20 from the world centre (the data origin).
+  const W = WORLD_W, H = WORLD_H, cx = W/2, cy = H/2;
+  for (let x=cx-Math.floor(cx/20)*20;x<=W;x+=20){ ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke(); }
+  for (let y=cy-Math.floor(cy/20)*20;y<=H;y+=20){ ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke(); }
   ctx.strokeStyle = "rgba(0,0,0,.18)";
-  ctx.beginPath(); ctx.moveTo(200,0); ctx.lineTo(200,240); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(0,120); ctx.lineTo(400,120); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx,0); ctx.lineTo(cx,H); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0,cy); ctx.lineTo(W,cy); ctx.stroke();
   ctx.restore();
 }
 function drawSelection(){
@@ -5403,7 +5555,7 @@ function drawSelection(){
   let hw=12, hh=12;
   if (BAR_TYPES.has(o.type)){ hw = o.length/2+6; hh = hw; }
   if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard"){ hw=hh=(o.radius||CFG.HAZARD_RADIUS_DEFAULT)+6; }
-  if (o.type==="ballast"){ hw=hh=(o.radius||CFG.BALLAST_RADIUS||8)+6; }
+  if (o.type==="ballast"){ hw=hh=(o.radius||CFG.BALLAST_RADIUS||10)+6; }
   if (o.type==="crawler"){ hw=hh=(o.radius||CFG.CRAWLER_RADIUS_DEFAULT)+6; }
   ctx.strokeStyle = "rgba(216,129,0,.95)";
   ctx.lineWidth = 1;
@@ -5417,17 +5569,18 @@ function drawSelection(){
     ctx.strokeStyle = "rgba(216,129,0,.9)";
     ctx.beginPath(); ctx.moveTo(cx,cy); ctx.lineTo(h[0],h[1]); ctx.stroke();
     ctx.fillStyle = "#d88100";
-    ctx.beginPath(); ctx.arc(h[0],h[1],4.5,0,7); ctx.fill();
+    ctx.beginPath(); ctx.arc(h[0],h[1],4.5*viewUiK,0,7); ctx.fill();
     ctx.strokeStyle = "#111";
-    ctx.beginPath(); ctx.arc(h[0],h[1],4.5,0,7); ctx.stroke();
+    ctx.beginPath(); ctx.arc(h[0],h[1],4.5*viewUiK,0,7); ctx.stroke();
   }
   // slide-angle handle (square at rail + end)
   const sh = slideHandlePos(o);
   if (sh){
     ctx.fillStyle = "#d88100";
-    ctx.fillRect(sh[0]-3.5, sh[1]-3.5, 7, 7);
+    const hs = 3.5*viewUiK;
+    ctx.fillRect(sh[0]-hs, sh[1]-hs, 2*hs, 2*hs);
     ctx.strokeStyle = "#111";
-    ctx.strokeRect(sh[0]-3.5, sh[1]-3.5, 7, 7);
+    ctx.strokeRect(sh[0]-hs, sh[1]-hs, 2*hs, 2*hs);
   }
   ctx.restore();
 }
@@ -5446,15 +5599,53 @@ function slideHandlePos(o){
 }
 
 /* ---------- render loop ---------- */
+/** Canvas backing store: 2x the world in edit mode, 2x the 400x240 view in
+    Test (the follow camera scrolls the world under it). A 400x240 world is
+    800x480 either way, exactly as before worlds existed. */
+function ensureCanvasSize(w, h){
+  if (cv.width === w && cv.height === h) return;
+  cv.width = w; cv.height = h;
+  ctx.imageSmoothingEnabled = false;
+  applyViewRotate();
+}
+/** Starting camera view (camera.snap at load): centred on the spawn and
+    clamped to the world. Uses the authored spawn point, not the rail point
+    the game projects it onto, so it can differ by a few pixels. */
+function editorStartView(){
+  if (WORLD_W === CFG.SCREEN_W && WORLD_H === CFG.SCREEN_H) return [0, 0];
+  const spawn = level.objects.find(o => o.type === "spawn");
+  let bx, by;
+  if (spawn) [bx, by] = toScreen(spawn.x, spawn.y);
+  else { bx = CFG.ARENA_INSET + 40; by = WORLD_H - CFG.ARENA_INSET; }
+  const [x, y] = createCamera(WORLD_W, WORLD_H).snapTargetFor(bx, by);
+  return [Math.floor(x + 0.5), Math.floor(y + 0.5)];
+}
+function drawStartView(vx, vy){
+  if (WORLD_W === CFG.SCREEN_W && WORLD_H === CFG.SCREEN_H) return;
+  ctx.save();
+  ctx.strokeStyle = "rgba(30,80,200,.8)";
+  ctx.lineWidth = Math.max(1, viewUiK * 0.75);
+  ctx.setLineDash([6 * viewUiK, 4 * viewUiK]);
+  ctx.strokeRect(vx + 0.5, vy + 0.5, CFG.SCREEN_W - 1, CFG.SCREEN_H - 1);
+  ctx.setLineDash([]);
+  ctx.fillStyle = "rgba(30,80,200,.8)";
+  ctx.font = `${Math.round(8 * viewUiK)}px ui-monospace, Menlo, Consolas, monospace`;
+  ctx.textAlign = "right"; ctx.textBaseline = "bottom";
+  ctx.fillText("start view", vx + CFG.SCREEN_W - 3, vy + CFG.SCREEN_H - 2);
+  ctx.restore();
+}
 function render(){
+  ensureCanvasSize(WORLD_W * 2, WORLD_H * 2);
   ctx.setTransform(2,0,0,2,0,0);
   ctx.fillStyle = "#fff";
-  ctx.fillRect(0,0,400,240);
+  ctx.fillRect(0,0,WORLD_W,WORLD_H);
   drawGrid();
   drawArena(resolveArenaBorders(level));
   for (let i=0;i<level.objects.length;i++) drawObject(level.objects[i], i);
   drawOverlays();
-  drawTimeHudGuide();
+  const [vx, vy] = editorStartView();
+  drawTimeHudGuide(vx, vy);
+  drawStartView(vx, vy);
   drawGravityChevron();
   if (!playing) drawSelection();
 }
@@ -5465,6 +5656,9 @@ function loop(t){
   if (acc > 0.5) acc = 0.5;
   const stepDt = 1/CFG.FPS;
   activeLevelMode = levelModeOf(level);
+  // coords.setWorld for the editor view. A running Test sim set the same
+  // world at create; this keeps toScreen in step if the level changes.
+  if (!(testing && testSim)) setWorld(...worldSizeOf(level));
   while (acc >= stepDt){
     acc -= stepDt;
     frame++;
@@ -5473,6 +5667,8 @@ function loop(t){
       testSim.applyAccelToCrankables();
       testSim.handleCrank(consumeCrank());
       testSim.update();
+      // main.lua game.updateCling: follow after every early return.
+      testSim.game.camera.follow(...testSim.worldPos());
       if (testSim.game.levelComplete){
         const f = testSim.game.frameCount;
         if (provenClearFrames == null || f < provenClearFrames){
@@ -5575,7 +5771,7 @@ function isCrankableGrouped(o){
   const drive = objectDrive(o);
   if (!drive) return false;
   const mode = levelModeOf(level);
-  if (mode === "standard") return drive === "L" || drive === "R";
+  if (modeSelectsGroups(mode)) return drive === "L" || drive === "R";
   if (mode === "gravityflip") return drive === "gravity";
   return false;
 }
@@ -5602,8 +5798,8 @@ function startTest(){
   const unbound = testSim.objects.some(o => o.type === "crawler" && !o.host);
   const testMode = levelModeOf(level);
   const hasGroups = level.objects.some(o => o.group === "L" || o.group === "R");
-  const testHelp = (testMode === "standard" && hasGroups)
-      ? "TEST — <b>wheel / A D</b> crank &nbsp;<b>&#8592;</b> group L &nbsp;<b>&#8594;</b> group R &nbsp;<b>&#8593;</b> jump &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit"
+  const testHelp = (modeSelectsGroups(testMode) && hasGroups)
+      ? "TEST — <b>wheel / &#8592;&#8594; / A D</b> crank &nbsp;<b>Q</b> group L &nbsp;<b>E</b> group R &nbsp;<b>&#8593;</b> jump &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit"
       : testMode === "gravityflip"
       ? "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>tilt</b> gravity &nbsp;<b>&#8593;</b> CLING/FIRE &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit"
       : "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>&#8593;</b> jump &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit";
@@ -5733,10 +5929,14 @@ function drawSlideRailSim(obj){
   ctx.closePath(); ctx.fill();
 }
 function drawSim(sim){
+  const g = sim.game, ball = sim.ball;
+  // The game screen is 400x240; the world scrolls under it (camera.offset).
+  ensureCanvasSize(CFG.SCREEN_W * 2, CFG.SCREEN_H * 2);
+  const [camX, camY] = g.camera.offset();
   ctx.setTransform(2,0,0,2,0,0);
   ctx.fillStyle = "#fff";
-  ctx.fillRect(0,0,400,240);
-  const g = sim.game, ball = sim.ball;
+  ctx.fillRect(0,0,CFG.SCREEN_W,CFG.SCREEN_H);
+  ctx.setTransform(2,0,0,2,-2*camX,-2*camY);
   drawArena(g.arenaBorders || defaultBorders());
   drawGravityChevron();
   drawArenaSeals(sim);
@@ -5817,15 +6017,9 @@ function drawSim(sim){
         break;
       }
       case "ballast": {
-        drawSlideRailAtS(obj.x, obj.y, obj.slideAngle, obj.minSlide, obj.maxSlide, obj.radius || 8);
+        drawSlideRailAtS(obj.x, obj.y, obj.slideAngle, obj.minSlide, obj.maxSlide, obj.radius || CFG.BALLAST_RADIUS || 10);
         const [cx,cy] = slideCenterOfSim(obj);
-        const r = obj.radius || CFG.BALLAST_RADIUS || 8;
-        ctx.fillStyle = INK;
-        ctx.beginPath(); ctx.arc(cx,cy,r,0,7); ctx.fill();
-        ctx.fillStyle = "#fff";
-        ctx.beginPath(); ctx.arc(cx,cy,Math.max(1,r*0.35),0,7); ctx.fill();
-        ctx.strokeStyle = INK;
-        ctx.beginPath(); ctx.arc(cx,cy,r,0,7); ctx.stroke();
+        drawBallastDriveBadge(cx, cy, obj.group);
         break;
       }
       case "pressure_plate": drawPressurePlateAtS(obj); break;
@@ -5874,7 +6068,9 @@ function drawSim(sim){
     }
   }
 
-  // HUD — TA clock/PB guide first (device layout), then editor chrome below it
+  // HUD — screen space, not scrolled. TA clock/PB guide first (device
+  // layout), then editor chrome below it.
+  ctx.setTransform(2,0,0,2,0,0);
   drawTimeHudGuide();
   const hudChromeY = el("ovHud").checked ? 14 : 5;
   ctx.fillStyle = INK;
@@ -5935,19 +6131,21 @@ function hitTest(sx,sy){
   if (selIdx >= 0 && selIdx < level.objects.length){
     const o = level.objects[selIdx];
     const rh = rotHandlePos(o,selIdx);
-    if (rh && Math.hypot(sx-rh[0],sy-rh[1]) <= 7) return {mode:"rotate", idx:selIdx};
+    const k = viewUiK;
+    if (rh && Math.hypot(sx-rh[0],sy-rh[1]) <= 7*k) return {mode:"rotate", idx:selIdx};
     const sh = slideHandlePos(o);
-    if (sh && Math.hypot(sx-sh[0],sy-sh[1]) <= 7) return {mode:"slideangle", idx:selIdx};
+    if (sh && Math.hypot(sx-sh[0],sy-sh[1]) <= 7*k) return {mode:"slideangle", idx:selIdx};
   }
   for (let i=level.objects.length-1; i>=0; i--){
     const o = level.objects[i];
     const [cx,cy] = bodyCenterScreen(o,i);
     let hit = false;
-    if (o.type==="spawn") hit = Math.hypot(sx-cx,sy-cy) <= 10;
-    else if (o.type==="exit") hit = Math.abs(sx-cx)<=15 && Math.abs(sy-cy)<=15;
-    else if (o.type==="key" || o.type==="coin") hit = Math.hypot(sx-cx,sy-cy) <= 8;
+    const k = viewUiK;   // 1 unless a big world is scaled down
+    if (o.type==="spawn") hit = Math.hypot(sx-cx,sy-cy) <= 10*k;
+    else if (o.type==="exit") hit = Math.abs(sx-cx)<=15*k && Math.abs(sy-cy)<=15*k;
+    else if (o.type==="key" || o.type==="coin") hit = Math.hypot(sx-cx,sy-cy) <= 8*k;
     else if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard"||o.type==="crawler"||o.type==="ballast")
-      hit = Math.hypot(sx-cx,sy-cy) <= Math.max(8, o.radius||(o.type==="crawler"?CFG.CRAWLER_RADIUS_DEFAULT:(o.type==="ballast"?(CFG.BALLAST_RADIUS||8):CFG.HAZARD_RADIUS_DEFAULT)));
+      hit = Math.hypot(sx-cx,sy-cy) <= Math.max(8, o.radius||(o.type==="crawler"?CFG.CRAWLER_RADIUS_DEFAULT:(o.type==="ballast"?(CFG.BALLAST_RADIUS||10):CFG.HAZARD_RADIUS_DEFAULT)));
     else if (o.type==="peg")
       hit = Math.hypot(sx-cx,sy-cy) <= pegRadiusOf(o) + 2;
     else if (o.type==="launcher") hit = Math.hypot(sx-cx,sy-cy) <= 16;
@@ -6014,6 +6212,10 @@ function loadLocal(){
         migrateLegacyBorders(l);
         const migrated = migrateLetterFields(l);
         if ("theme" in l) delete l.theme;
+        // Autosaves from before standard became the default left gravityflip
+        // implicit (no mode key). Every save since stores the mode by name.
+        if (!("mode" in l)) l.mode = "gravityflip";
+        l.mode = levelModeOf(l);
         level = l;
         if (migrated) saveLocal();
         return true;
@@ -6022,7 +6224,7 @@ function loadLocal(){
   }catch(e){}
   return false;
 }
-function commit(){ saveLocal(); refreshAll(); }
+function commit(){ setWorld(...worldSizeOf(level)); saveLocal(); refreshAll(); }
 
 /* ---------- validation ---------- */
 function validate(){
@@ -6032,12 +6234,18 @@ function validate(){
   if (crank > 4) errs.push(`Too many crankables: ${crank} (gravity members, or L/R groups in standard mode, must be ≤ 4 — the game asserts).`);
   const spawns = objs.filter(o=>o.type==="spawn").length;
   if (spawns !== 1) errs.push(spawns===0 ? "No spawn — exactly one is required." : `Multiple spawns (${spawns}) — exactly one is required.`);
+  if (LEVEL_MODE_SPECS[levelModeOf(level)].scroll && level.world != null){
+    const werr = worldError(level.world);
+    if (werr) errs.push(`${werr} (the game asserts at load).`);
+  }
+  // Arena edge in centre-origin data: ±(world/2 − inset). ±180 / ±100 at 400x240.
+  const ax = WORLD_W/2 - CFG.ARENA_INSET, ay = WORLD_H/2 - CFG.ARENA_INSET;
   const exits = objs.filter(o=>o.type==="exit");
   if (exits.length === 0) errs.push("No exit — at least one is required.");
   exits.forEach((o,k)=>{
-    const onPerim = Math.abs(Math.abs(o.x)-180)<=2 || Math.abs(Math.abs(o.y)-100)<=2;
-    const inside = Math.abs(o.x)<=182 && Math.abs(o.y)<=102;
-    if (!onPerim || !inside) warns.push(`Exit at (${fmtNum(o.x)}, ${fmtNum(o.y)}) is not on the arena perimeter (x=±180 or y=±100).`);
+    const onPerim = Math.abs(Math.abs(o.x)-ax)<=2 || Math.abs(Math.abs(o.y)-ay)<=2;
+    const inside = Math.abs(o.x)<=ax+2 && Math.abs(o.y)<=ay+2;
+    if (!onPerim || !inside) warns.push(`Exit at (${fmtNum(o.x)}, ${fmtNum(o.y)}) is not on the arena perimeter (x=±${fmtNum(ax)} or y=±${fmtNum(ay)}).`);
   });
   // KEY-GATED EXIT: count derived from key objects; cap at CLING_KEYS_MAX.
   const keyCount = objs.filter(o=>o.type==="key" || o.type==="coin").length;
@@ -6056,7 +6264,7 @@ function validate(){
   }
   objs.forEach((o,i)=>{
     const reach = objectReach(o) + (SLIDE_TYPES.has(o.type) ? slideSpan(o) : 0);
-    if (Math.abs(o.x) > 180 + reach || Math.abs(o.y) > 100 + reach)
+    if (Math.abs(o.x) > ax + reach || Math.abs(o.y) > ay + reach)
       warns.push(`#${i+1} ${o.type} at (${fmtNum(o.x)}, ${fmtNum(o.y)}) sits outside the arena beyond its reach.`);
   });
 
@@ -6125,7 +6333,7 @@ function validate(){
   if (spawn){
     const [sx,sy] = toScreen(spawn.x, spawn.y);
     const nearest = editorCrawlerHostRail({type:"crawler", x: spawn.x, y: spawn.y});
-    const arenaD = RL.closestPoint(arenaRailS(resolveArenaBorders(level)), sx, sy).d;
+    const arenaD = RL.closestPoint(arenaRailS(resolveArenaBorders(level), WORLD_W, WORLD_H), sx, sy).d;
     const spawnD = nearest ? RL.closestPoint(nearest, sx, sy).d : Infinity;
     if (nearest && spawnD + 0.01 < arenaD){
       objs.forEach((o,i)=>{
@@ -6146,7 +6354,7 @@ function validate(){
 
   // Flush long-face seals (intentional; blocks perimeter slip-through in play).
   const inset = CFG.ARENA_INSET;
-  const aL = inset, aT = inset, aR = CFG.SCREEN_W - inset, aB = CFG.SCREEN_H - inset;
+  const aL = inset, aT = inset, aR = WORLD_W - inset, aB = WORLD_H - inset;
   objs.forEach((o,i)=>{
     if (!["wall","toggle_wall","moving_wall","sliding_wall"].includes(o.type)) return;
     let cx, cy;
@@ -6164,7 +6372,7 @@ function validate(){
       : (o.type === "wall") ? wallBodyWidth(o) : CFG.WALL_WIDTH;
     const len = o.length ?? CFG.WALL_SIZES[o.size || "M"] ?? CFG.WALL_SIZES.M;
     const rail = makeBarOutlineRailS(cx, cy, len, o.angle || 0, w);
-    const arena = arenaRailS(resolveArenaBorders(level));
+    const arena = arenaRailS(resolveArenaBorders(level), WORLD_W, WORLD_H);
     const seals = RL.arenaEdgeSeals(
       rail, arena, aL, aT, aR, aB, CFG.JUNCTION_SNAP, SIM.EDGE_SEAL_MIN_OVERLAP ?? 0.5);
     for (const seal of seals){
@@ -6242,7 +6450,7 @@ function renderProps(){
     box.appendChild(propNum("radius", "radius", o, {min:2}));
   if (t === "ballast"){
     const hint = document.createElement("div"); hint.className = "hint";
-    hint.textContent = "tilt weight on a wire. parks at the downhill stop. presses plates. not a tilt crankable";
+    hint.textContent = "weight on a wire. presses plates. cling cannot board the wire";
     box.appendChild(hint);
   }
   if (t==="crawler"){
@@ -6344,7 +6552,8 @@ function renderProps(){
   }
   if (ANGLED.has(t))
     box.appendChild(propNum("angle °", "angle", o, {step:15}));
-  if (t === "deflector" || ((t === "sliding_wall" || t === "sliding_hazard") && o.plateId == null)){
+  if (t === "deflector" || t === "ballast"
+      || ((t === "sliding_wall" || t === "sliding_hazard") && o.plateId == null)){
     const options = t === "deflector" ? ["none","gravity","L","R"] : ["gravity","L","R"];
     const current = (o.group === "L" || o.group === "R") ? o.group
       : (t === "deflector" && o.gravity !== true) ? "none" : "gravity";
@@ -6363,7 +6572,9 @@ function renderProps(){
     hint.textContent = current === "L" || current === "R"
       ? "standard: " + current + " selects this. the crank moves the whole group"
       : current === "gravity"
-      ? "gravity mode: follows device tilt"
+      ? (t === "ballast"
+          ? "both modes: parks at the downhill stop. the ball's down stays fixed in standard. tilt ballast is not a crankable"
+          : "follows device tilt in both level modes. in standard the ball's down stays fixed")
       : "static blade. not moved by tilt or the crank";
     box.appendChild(hint);
   }
@@ -6610,13 +6821,14 @@ function canvasScreenPos(e){
   const cy = (r.top + r.bottom) / 2;
   const dx = e.clientX - cx;
   const dy = e.clientY - cy;
-  const a = rad(viewRollDeg);
+  const a = rad(cssViewRoll());
   const c = Math.cos(a), s = Math.sin(a);
-  // Inverse of rotate(+viewRollDeg) scale(viewScale): un-rotate, then unscale.
+  // Inverse of rotate(+cssViewRoll) scale(viewScale): un-rotate, then unscale.
   // Positive roll is clockwise (right side down), matching the plumb.
   const rx = (dx * c + dy * s) / viewScale;
   const ry = (-dx * s + dy * c) / viewScale;
-  return [(rx + 400) / 2, (ry + 240) / 2];
+  // Backing store is 2 px per world px (2x the world; 800x480 for 400x240).
+  return [(rx + cv.width / 2) / 2, (ry + cv.height / 2) / 2];
 }
 const snapV = (v, fine)=> Math.round(v / (fine?1:5)) * (fine?1:5);
 const snapA = (a, fine)=> { const s = fine?1:15; return ((Math.round(a/s)*s)%360+360)%360; };
@@ -6656,7 +6868,7 @@ cv.addEventListener("mousedown", e=>{
 window.addEventListener("mousemove", e=>{
   const [sx,sy] = canvasScreenPos(e);
   const [ccx,ccy] = toCenter(sx,sy);
-  if (sx>=0 && sx<=400 && sy>=0 && sy<=240)
+  if (!testing && sx>=0 && sx<=WORLD_W && sy>=0 && sy<=WORLD_H)
     el("stCursor").textContent = `${Math.round(ccx)}, ${Math.round(ccy)}`;
   if (!drag) return;
   const o = level.objects[drag.idx];
@@ -6751,19 +6963,19 @@ window.addEventListener("keydown", e=>{
     if (e.key === "Shift"){ testKeys.add("Shift"); return; }
     switch(e.key){
       case "ArrowLeft":
-        e.preventDefault();
-        if (levelModeOf(level) === "standard" && level.objects.some(o => o.group === "L")){
-          if (!e.repeat) testSim.selectGroup("L");
-          return;
-        }
-        testKeys.add("ArrowLeft"); return;
       case "ArrowRight":
+        // A group blade stays a normal rail until Q/E (d-pad L/R) selects it.
+        // Landing on it must not take the crank.
         e.preventDefault();
-        if (levelModeOf(level) === "standard" && level.objects.some(o => o.group === "R")){
-          if (!e.repeat) testSim.selectGroup("R");
-          return;
-        }
-        testKeys.add("ArrowRight"); return;
+        testKeys.add(e.key); return;
+      case "q": case "Q":
+        e.preventDefault();
+        if (!e.repeat) testSim.selectGroup("L");
+        return;
+      case "e": case "E":
+        e.preventDefault();
+        if (!e.repeat) testSim.selectGroup("R");
+        return;
       case "a": case "d": case "A": case "D":
         e.preventDefault(); testKeys.add(e.key.toLowerCase()); return;
       case "ArrowUp": case " ":
@@ -6816,14 +7028,23 @@ window.addEventListener("keydown", e=>{
 });
 
 /* ---------- level meta panel ---------- */
+function cssViewRoll(){
+  // Standard keeps the frame upright. The slider still drives tilt objects.
+  return activeLevelMode === "gravityflip" ? viewRollDeg : 0;
+}
 function syncModeChrome(){
   activeLevelMode = levelModeOf(level);
-  const on = activeLevelMode === "gravityflip";
+  const gravityflip = activeLevelMode === "gravityflip";
   const slider = el("tiltSlider");
-  if (slider) slider.disabled = !on;
+  if (slider) slider.disabled = false;
   const ctl = document.querySelector(".tilt-ctl");
-  if (ctl) ctl.style.opacity = on ? "" : "0.45";
-  if (!on && viewRollDeg !== 0) setViewRollDeg(0);
+  if (ctl){
+    ctl.style.opacity = "";
+    ctl.title = gravityflip
+      ? "Device tilt (rest-relative). Rotates the view; gravity, jump/drop, and sliders match gameplay."
+      : "Device tilt. The view stays upright. Objects set to tilt still move.";
+  }
+  applyViewRotate();
 }
 function syncLevelPanel(){
   el("lvName").value = level.name || "";
@@ -6834,21 +7055,25 @@ function syncLevelPanel(){
   el("bdBottom").value = borders.bottom;
   el("bdLeft").value = borders.left;
   el("bdRight").value = borders.right;
-  const sel = el("lvMode");
-  if (sel){
-    const raw = levelModeOf(level);
-    for (const opt of [...sel.options]){
-      if (opt.value !== "standard" && opt.value !== "gravityflip") opt.remove();
-    }
-    if (raw !== "standard" && raw !== "gravityflip"){
-      const extra = document.createElement("option");
-      extra.value = raw;
-      extra.textContent = raw;
-      sel.appendChild(extra);
-    }
-    sel.value = raw;
-  }
+  level.mode = levelModeOf(level);
+  el("lvMode").value = level.mode;
+  setWorld(...worldSizeOf(level));
+  syncWorldPanel();
   syncModeChrome();
+}
+/** World W/H inputs: shown for a scrolling mode only. Unset world reads as 400x240. */
+function syncWorldPanel(){
+  const scroll = LEVEL_MODE_SPECS[levelModeOf(level)].scroll;
+  el("worldCtl").style.display = scroll ? "" : "none";
+  const w = level.world ? level.world.w : CFG.SCREEN_W;
+  const h = level.world ? level.world.h : CFG.SCREEN_H;
+  const iw = el("lvWorldW"), ih = el("lvWorldH");
+  if (document.activeElement !== iw) iw.value = String(w);
+  if (document.activeElement !== ih) ih.value = String(h);
+  const err = scroll && level.world != null ? worldError(level.world) : null;
+  el("worldErr").textContent = err ? err + " — plays 400x240 here; the game asserts" : "";
+  iw.classList.toggle("bad", !!err);
+  ih.classList.toggle("bad", !!err);
 }
 function bindMeta(id, key){
   el(id).addEventListener("change", ()=>{
@@ -6860,14 +7085,24 @@ function bindMeta(id, key){
 bindMeta("lvName","name"); bindMeta("lvTutorial","tutorial");
 el("lvMode").addEventListener("change", ()=>{
   pushUndo();
-  const v = el("lvMode").value;
-  // gravityflip is the omitted default. Legacy names collapse onto the new ones.
-  if (v === "gravityflip" || v === "gravity") delete level.mode;
-  else if (v === "nogravity" || v === "crank") level.mode = "standard";
-  else level.mode = v;
+  // Stored by name. standard is the default and drops out of both exports.
+  level.mode = levelModeOf({mode: el("lvMode").value});
+  syncWorldPanel();
   syncModeChrome();
   commit();
 });
+function onWorldInput(){
+  // Number("") is 0, which worldError reports, so a cleared box shows an error.
+  const w = Number(el("lvWorldW").value), h = Number(el("lvWorldH").value);
+  const cur = level.world || {w: CFG.SCREEN_W, h: CFG.SCREEN_H};
+  if (cur.w === w && cur.h === h) return;
+  pushUndo();
+  level.world = {w, h};
+  syncWorldPanel();
+  commit();
+}
+el("lvWorldW").addEventListener("change", onWorldInput);
+el("lvWorldH").addEventListener("change", onWorldInput);
 function bindBorderEdge(id, edge){
   el(id).addEventListener("change", ()=>{
     pushUndo();
@@ -6904,9 +7139,12 @@ function applyViewRotate(){
   const wrap = el("canvasWrap");
   const holder = el("canvasHolder");
   const stage = el("stage");
-  const a = rad(viewRollDeg);
+  const shownRoll = cssViewRoll();
+  const a = rad(shownRoll);
   const c = Math.cos(a), s = Math.sin(a);
-  const w = 800, h = 480;
+  // Scale-to-fit: a bigger world gets a smaller scale, so the whole world
+  // is always on screen. 400x240 is 800x480 here, the same as before.
+  const w = cv.width, h = cv.height;
   const bw = Math.abs(w * c) + Math.abs(h * s);
   const bh = Math.abs(w * s) + Math.abs(h * c);
   // Border (3px each side) and the one-sided 6px shadow rotate with the frame.
@@ -6934,11 +7172,20 @@ function applyViewRotate(){
   }
   if (!(scale > 0)) scale = 1;
   viewScale = scale;
+  // How much smaller a world pixel is than it would be in a 400x240 world in
+  // this same stage. Handles and pick radii grow by this so they stay
+  // grabbable when a big world is scaled down. 1 for every 400x240 level.
+  let baseScale = 1;
+  if (availW > slack && availH > slack){
+    baseScale = Math.min(1, (availW - slack) / (CFG.SCREEN_W * 2), (availH - slack) / (CFG.SCREEN_H * 2));
+  }
+  viewUiK = (w === CFG.SCREEN_W * 2 && h === CFG.SCREEN_H * 2) || !(baseScale > 0)
+    ? 1 : Math.max(1, baseScale / scale);
   holder.style.width = Math.max(1, Math.floor(bw * scale)) + "px";
   holder.style.height = Math.max(1, Math.floor(bh * scale)) + "px";
   // Scale first, then rotate (CSS applies right to left).
   // Positive roll is clockwise: right side down, plumb toward that side.
-  wrap.style.transform = "rotate(" + viewRollDeg + "deg) scale(" + scale + ")";
+  wrap.style.transform = "rotate(" + shownRoll + "deg) scale(" + scale + ")";
   const label = el("tiltDeg");
   if (label) label.textContent = Math.round(viewRollDeg) + "\u00b0";
   const slider = el("tiltSlider");
@@ -6973,7 +7220,7 @@ el("btnTest").addEventListener("click", ()=>{
 el("btnNew").addEventListener("click", ()=>{
   if (!confirm("Start a new empty level? (current level stays in undo history)")) return;
   stopPlay(); pushUndo();
-  level = {name:"Untitled", tutorial:"", borders:defaultBorders(), objects:[
+  level = {name:"Untitled", tutorial:"", mode:"standard", borders:defaultBorders(), objects:[
     newObject("spawn", -160, -100),
     newObject("exit", 180, -100),
   ]};
@@ -6993,6 +7240,9 @@ el("btnExportShare").addEventListener("click", ()=>{
   try{
     const {errs} = validate();
     const payload = deepCopy(level);
+    payload.mode = levelModeOf(level);
+    const world = exportWorldOf(level);
+    if (world) payload.world = world; else delete payload.world;
     if (provenClearFrames != null) payload.par_frames = provenClearFrames;
     const code = encodeShareCode(payload);
     el("ioText").value = code;
@@ -7042,9 +7292,9 @@ el("btnImportShare").addEventListener("click", ()=>{
       objects: lv.objects || [],
     };
     if (lv.par_frames != null) level.par_frames = lv.par_frames;
-    if (typeof lv.mode === "string" && lv.mode !== "" && lv.mode !== "gravity" && lv.mode !== "gravityflip"){
-      level.mode = (lv.mode === "nogravity" || lv.mode === "crank") ? "standard" : lv.mode;
-    }
+    level.mode = levelModeOf(lv);
+    if (lv.world) level.world = {w: lv.world.w, h: lv.world.h};
+    if (lv._extras) level._extras = lv._extras;
     selIdx = -1;
     provenClearFrames = null;
     syncLevelPanel(); commit();
@@ -7108,7 +7358,7 @@ function ioMsg(msg, isErr){
 
 /* ---------- boot ---------- */
 if (!loadLocal()){
-  level = {name:"Untitled", tutorial:"", borders:defaultBorders(), objects:[
+  level = {name:"Untitled", tutorial:"", mode:"standard", borders:defaultBorders(), objects:[
     newObject("spawn", -160, -100),
     newObject("exit", 180, -100),
   ]};
