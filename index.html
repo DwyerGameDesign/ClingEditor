@@ -5804,11 +5804,6 @@ function isCrankableGrouped(o){
   return false;
 }
 function startTest(){
-  const crank = level.objects.filter(isCrankableGrouped).length;
-  if (crank > 4){
-    alert("Can't test: "+crank+" crankables. The game asserts a max of 4 (gravity members, or L/R groups in standard mode).");
-    return;
-  }
   stopPlay();           // also stops any previous test
   setArmed(null);
   selIdx = -1; refreshSel();
@@ -6259,7 +6254,7 @@ function validate(){
   const errs = [], warns = [], infos = [];
   const objs = level.objects;
   const crank = objs.filter(isCrankableGrouped).length;
-  if (crank > 4) errs.push(`Too many crankables: ${crank} (gravity members, or L/R groups in standard mode, must be ≤ 4 — the game asserts).`);
+  if (crank > 10) warns.push(`Many crankables: ${crank} (soft cap 10 — gravity members, or L/R groups in standard mode).`);
   const spawns = objs.filter(o=>o.type==="spawn").length;
   if (spawns !== 1) errs.push(spawns===0 ? "No spawn — exactly one is required." : `Multiple spawns (${spawns}) — exactly one is required.`);
   if (LEVEL_MODE_SPECS[levelModeOf(level)].scroll && level.world != null){
