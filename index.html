@@ -204,18 +204,16 @@
     <button class="pal-btn" data-type="wall"><span class="g">&#9473;</span>wall</button>
     <button class="pal-btn" data-type="peg"><span class="g">&#9679;</span>peg</button>
     <button class="pal-btn" data-type="deflector"><span class="g">&#9639;</span>deflector</button>
-    <button class="pal-btn" data-type="sweeper"><span class="g">&#10530;</span>sweeper</button>
     <button class="pal-btn" data-type="toggle_wall"><span class="g">&#8635;</span>toggle wall</button>
     <button class="pal-btn" data-type="sliding_wall"><span class="g">&#8703;</span>sliding wall</button>
-    <button class="pal-btn" data-type="moving_wall"><span class="g">&#8644;</span>moving wall</button>
-    <button class="pal-btn" data-type="moving_hazard"><span class="g">&#10042;</span>moving hazard</button>
     <button class="pal-btn" data-type="sliding_hazard"><span class="g">&#10042;</span>sliding hazard</button>
     <button class="pal-btn" data-type="pressure_plate"><span class="g">&#9632;</span>pressure plate</button>
     <button class="pal-btn" data-type="ballast"><span class="g">&#9679;</span>ballast</button>
     <button class="pal-btn" data-type="crawler"><span class="g">&#10042;</span>crawler</button>
     <button class="pal-btn" data-type="launcher"><span class="g">&#10148;</span>launcher</button>
+    <button class="pal-btn" data-type="plunger"><span class="g">&#8607;</span>plunger</button>
     <button class="pal-btn" data-type="text"><span class="g">&#8505;</span>text</button>
-    <div class="hint" style="margin-top:8px">Click a tool, then click the arena. Select an object for Duplicate / Delete / Replace (pick a type from the palette).<br><br><kbd>Esc</kbd> cancel / deselect<br><kbd>&#8679;</kbd> fine snap<br><kbd>&#8963;/&#8984;Z</kbd> undo<br><kbd>&#8963;/&#8984;&#8679;Z</kbd> redo<br><kbd>&#8963;/&#8984;D</kbd> duplicate<br><kbd>&#9003;</kbd> delete<br>arrows nudge 5 (&#8679;=1)</div>
+    <div class="hint" style="margin-top:8px">Click a tool, then click the arena. Select an object for Duplicate / Delete / Replace (pick a type from the palette). Deflectors and sliders pick how they move (static / gravity / crank / plate / auto) under <b>motion</b> in Properties.<br><br><kbd>Esc</kbd> cancel / deselect<br><kbd>&#8679;</kbd> fine snap<br><kbd>&#8963;/&#8984;Z</kbd> undo<br><kbd>&#8963;/&#8984;&#8679;Z</kbd> redo<br><kbd>&#8963;/&#8984;D</kbd> duplicate<br><kbd>&#9003;</kbd> delete<br>arrows nudge 5 (&#8679;=1)</div>
   </nav>
 
   <div id="stage">
@@ -268,8 +266,8 @@
 "use strict";
 /* =====================================================================
    Cling Level Editor — single file.
-   Data model is CENTER-ORIGIN, Y-UP (like levels.lua).
-   Launcher aim uses the same Y-up angles as levels.lua; negate for screen draw/sim.
+   Data model is BOTTOM-LEFT ORIGIN, Y-UP (like levels.lua).
+   Launcher and plunger aim use the same Y-up angles as levels.lua; negate for screen draw/sim.
    Other angles use screen/canvas convention after toScreen.
    ===================================================================== */
 
@@ -283,18 +281,10 @@ const CFG = {
   WORLD_MAX_H: 1200,
   WALL_LINE_WIDTH: 5,
   ARENA_INSET: 20,
-  BAR_WIDTH: 15,  // sliding_wall body
-  WALL_WIDTH: 10,  // wall / moving_wall / toggle_wall body
+  BAR_WIDTH: 15,  // sliding_wall body (crank / tilt / plate)
+  WALL_WIDTH: 10,  // wall / auto sliding_wall / toggle_wall body
   JUNCTION_SNAP: 4,
 
-  LEGACY_WALL_SIZES: {S:50,M:70,L:100},
-  LEGACY_DEFLECTOR_SIZES: {S:55,M:75,L:100},
-  LEGACY_SLIDER_SPANS: {S:40,M:60,L:90},
-  LEGACY_SWEEPER_SPEEDS: {S:0.8,M:1,F:1.3},
-  LEGACY_TOGGLE_INTERVALS: {S:210,M:150,F:105},
-  LEGACY_MOVING_SPEEDS: {S:0.005,M:0.008,F:0.012},
-
-  CRAWLER_SPEEDS: {S:0.8,M:1.2,F:1.8},
   DEFAULT_CRAWLER_SPEED: 1.2,
   DEFAULT_CRAWLER_FOLLOW_SPEED: 0.8,
   CRAWLER_RADIUS_DEFAULT: 10,
@@ -305,17 +295,15 @@ const CFG = {
   DEFAULT_DEFLECTOR_LENGTH: 75,
   DEFAULT_PEG_RADIUS: 40,
   PEG_SEGMENTS: 32,
-  DEFAULT_SLIDER_SPAN: 60,
-  DEFAULT_SWEEPER_SPEED: 1,
-  DEFAULT_TOGGLE_INTERVAL: 150,
-  DEFAULT_MOVING_SPEED: 0.008,
-
-  // Preset buttons + letterOfLength still use these aliases.
-  WALL_SIZES: {S:50,M:70,L:100},
-  DEFLECTOR_SIZES: {S:55,M:75,L:100},
+  DEFAULT_SLIDER_SPAN: 60,  // slideRange half-span, px
+  DEFAULT_SWEEPER_SPEED: 1,  // deflector motion = "auto", deg/frame
+  DEFAULT_TOGGLE_INTERVAL: 150,  // frames
+  DEFAULT_MOVING_SPEED: 0.008,  // sliding_* motion = "auto"
 
   HAZARD_RADIUS_DEFAULT: 15,
   LAUNCHER_MOUTH_DIST: 18,
+  PLUNGER_CUP_DIST: 16,  // base → cup at rest, px along the angle
+  PLUNGER_PULL_PX: 10,  // how far the cup draws back at full charge
   SPIKE_HAZARD_R: 10,
   SPIKE_HAZARD_GAP: 2,
 
@@ -342,8 +330,7 @@ const ARENA = {L:20, R:380, B:20, T:220}; // bottom-left Y-up extents at 400x240
 const ARENA_EDGE_NAMES = ["top","right","bottom","left"];
 
 /* ---------------- level mode + world size (main.lua LEVEL_MODES / worldSize) ---------------- */
-// Omitted, empty, and unknown modes are standard. Legacy "gravity" is
-// gravityflip; legacy "nogravity" / "crank" are standard (main.lua loadLevel).
+// Omitted, empty, and unknown modes are standard (main.lua loadLevel).
 const LEVEL_MODE_SPECS = {
   gravityflip:    { scroll:false },
   standard:       { scroll:false },
@@ -351,7 +338,6 @@ const LEVEL_MODE_SPECS = {
 };
 function levelModeOf(lv){
   const m = lv && lv.mode;
-  if (m === "gravity") return "gravityflip";
   if (typeof m === "string" && LEVEL_MODE_SPECS[m]) return m;
   return "standard";
 }
@@ -400,12 +386,83 @@ function launcherScreenAngle(authored){
   return ((-(authored||0)) % 360 + 360) % 360;
 }
 
-const BAR_TYPES = new Set(["wall","deflector","sweeper","toggle_wall","sliding_wall","moving_wall","pressure_plate"]);
-const SLIDE_TYPES = new Set(["sliding_wall","moving_wall","moving_hazard","sliding_hazard","ballast"]);
-const SOLID_CRAWLER_HOSTS = new Set(["wall","moving_wall","toggle_wall","sliding_wall","peg","deflector","sweeper"]);
+const BAR_TYPES = new Set(["wall","deflector","toggle_wall","sliding_wall","pressure_plate"]);
+const SLIDE_TYPES = new Set(["sliding_wall","sliding_hazard","ballast"]);
+const SOLID_CRAWLER_HOSTS = new Set(["wall","toggle_wall","sliding_wall","peg","deflector"]);
 // Dpad-selectable crank targets only. Launchers dock on contact (not selectable).
 const CRANKABLE = new Set(["deflector","sliding_wall","sliding_hazard"]);
-const ANGLED = new Set(["wall","deflector","sweeper","toggle_wall","sliding_wall","moving_wall","launcher","pressure_plate"]);
+const ANGLED = new Set(["wall","deflector","toggle_wall","sliding_wall","launcher","plunger","pressure_plate"]);
+// Y-up authored aim (coords.lua negates these two at load).
+const AIM_TYPES = new Set(["launcher","plunger"]);
+
+/* motion: how a deflector / sliding_wall / sliding_hazard moves. Missing means
+   the type default. The valid set per type is the codec's (LEVEL_CODEC.MOTIONS);
+   the order here is the inspector's. */
+const MOTION_ORDER = {
+  deflector:      ["static","gravity","crank","auto"],
+  sliding_wall:   ["gravity","crank","plate","auto"],
+  sliding_hazard: ["gravity","crank","plate","auto"],
+};
+function defaultMotionOf(type){
+  if (type === "deflector") return "static";
+  if (type === "sliding_wall" || type === "sliding_hazard") return "gravity";
+  return null;
+}
+/** Effective motion (type default when omitted); null for types without one. */
+function motionOf(o){
+  if (!o) return null;
+  const d = defaultMotionOf(o.type);
+  if (d == null) return null;
+  return (typeof o.motion === "string" && o.motion !== "") ? o.motion : d;
+}
+function isAutoMover(o){ return motionOf(o) === "auto"; }
+/** Drop fields the current motion does not use, so share codes stay clean.
+    Fills what the new motion needs (crank group, plate link) when absent. */
+function applyMotionFields(o){
+  const motions = MOTION_ORDER[o.type];
+  if (!motions) return;
+  if (!motions.includes(o.motion)) o.motion = defaultMotionOf(o.type);
+  const m = o.motion;
+  if (m === "crank"){
+    if (o.group !== "L" && o.group !== "R") o.group = "L";
+  } else delete o.group;
+  if (m === "plate"){
+    if (o.plateId == null) o.plateId = 1;
+  } else { delete o.plateId; delete o.pressedPosition; }
+  if (m === "auto"){
+    if (o.speed == null) o.speed = defaultSpeedForType(o.type);
+    if (o.type === "deflector"){
+      if (o.minAngle == null) o.minAngle = 0;
+      if (o.maxAngle == null) o.maxAngle = 90;
+    }
+  } else delete o.speed;
+  if (o.type === "deflector" && m !== "auto"){ delete o.minAngle; delete o.maxAngle; }
+}
+
+/** `gravity = true` is not a game field. The loader only follows tilt when
+    motion is the string "gravity", and an unknown boolean is ignored. A past
+    export kept it as an extra and wrote it back. Fold a lone true into
+    motion; drop it when motion is already something else. */
+function foldLegacyGravity(o, notes){
+  if (!o) return;
+  let legacy = o.gravity === true;
+  if (o._extra && o._extra.gravity === true) legacy = true;
+  if (o.gravity !== undefined) delete o.gravity;
+  if (o._extra && o._extra.gravity !== undefined){
+    delete o._extra.gravity;
+    if (Object.keys(o._extra).length === 0) delete o._extra;
+  }
+  if (!legacy || defaultMotionOf(o.type) == null) return;
+  const motion = (typeof o.motion === "string" && o.motion !== "") ? o.motion : null;
+  // Omitted motion, or the deflector default "static", is the boolean's
+  // only signal. An explicit crank / plate / auto motion wins.
+  if (motion == null || motion === defaultMotionOf(o.type)){
+    o.motion = "gravity";
+    applyMotionFields(o);
+  } else if (motion !== "gravity" && notes){
+    notes.push(o.type + ": dropped gravity=true (motion is \"" + motion + "\").");
+  }
+}
 
 function normalizeBorderMode(mode){
   if (mode === "full" || mode === "open" || mode === "spikes") return mode;
@@ -414,36 +471,19 @@ function normalizeBorderMode(mode){
 function defaultBorders(){
   return { top:"full", bottom:"full", left:"full", right:"full" };
 }
-/** One-shot: convert old ceiling/spikedEdges drafts into borders, then drop them. */
-function migrateLegacyBorders(level){
-  if (!level) return defaultBorders();
-  if (level.borders && typeof level.borders === "object" && !Array.isArray(level.borders)){
-    const borders = defaultBorders();
-    for (const edge of ARENA_EDGE_NAMES){
-      if (level.borders[edge] != null) borders[edge] = normalizeBorderMode(level.borders[edge]);
-    }
-    delete level.ceiling;
-    delete level.spikedEdges;
-    level.borders = borders;
-    return borders;
-  }
+/** Resolve borders from level.borders (per-edge full|open|spikes; missing
+    edges are full) and store the normalized table back on the level. */
+function resolveArenaBorders(level){
   const borders = defaultBorders();
-  const ceiling = level.ceiling;
-  if (ceiling === "open") borders.top = "open";
-  else if (ceiling === "spikes") borders.top = "spikes";
-  if (Array.isArray(level.spikedEdges)){
-    for (const name of level.spikedEdges){
-      if (borders[name] !== undefined && borders[name] !== "open") borders[name] = "spikes";
+  if (!level) return borders;
+  const b = level.borders;
+  if (b && typeof b === "object" && !Array.isArray(b)){
+    for (const edge of ARENA_EDGE_NAMES){
+      if (b[edge] != null) borders[edge] = normalizeBorderMode(b[edge]);
     }
   }
-  delete level.ceiling;
-  delete level.spikedEdges;
   level.borders = borders;
   return borders;
-}
-/** Resolve borders from level.borders (per-edge full|open|spikes). */
-function resolveArenaBorders(level){
-  return migrateLegacyBorders(level || {});
 }
 function spikesFromBorders(borders){
   const spikes = { top:false, bottom:false, left:false, right:false };
@@ -497,24 +537,15 @@ function newObject(type, x, y){
       o.length = CFG.DEFAULT_WALL_LENGTH; o.angle = 0;
       break;
     case "peg": o.radius = CFG.DEFAULT_PEG_RADIUS; break;
-    case "deflector": o.length = CFG.DEFAULT_DEFLECTOR_LENGTH; o.angle = 0; o.gravity = true; break;
-    case "sweeper":
-      o.length = CFG.DEFAULT_WALL_LENGTH; o.angle = 0; o.minAngle = 0; o.maxAngle = 90;
-      o.speed = CFG.DEFAULT_SWEEPER_SPEED; break;
+    // A placed deflector tilts by default (static is the data default; import
+    // fills a missing motion from defaultMotionOf before these fills run).
+    case "deflector": o.length = CFG.DEFAULT_DEFLECTOR_LENGTH; o.angle = 0; o.motion = "gravity"; break;
     case "toggle_wall":
       o.length = CFG.DEFAULT_WALL_LENGTH; o.angle = 0; o.angleStep = 45;
       o.speed = CFG.DEFAULT_TOGGLE_INTERVAL; break;
     case "sliding_wall":
       o.length = CFG.DEFAULT_WALL_LENGTH; o.angle = 0; o.slideAngle = 0;
       o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5; break;
-    case "moving_wall":
-      o.length = CFG.DEFAULT_WALL_LENGTH; o.angle = 0; o.slideAngle = 0;
-      o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5;
-      o.speed = CFG.DEFAULT_MOVING_SPEED; break;
-    case "moving_hazard":
-      o.radius = CFG.HAZARD_RADIUS_DEFAULT; o.slideAngle = 0;
-      o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5;
-      o.speed = CFG.DEFAULT_MOVING_SPEED; break;
     case "sliding_hazard":
       o.radius = CFG.HAZARD_RADIUS_DEFAULT; o.slideAngle = 0;
       o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5; break;
@@ -525,8 +556,9 @@ function newObject(type, x, y){
       o.slideRange = CFG.DEFAULT_SLIDER_SPAN; o.objectPosition = 0.5; break;
     case "crawler":
       o.radius = CFG.CRAWLER_RADIUS_DEFAULT; o.direction = 1;
-      o.startPosition = 0; o.speed = "M"; o.mode = "patrol"; break;
+      o.startPosition = 0; o.mode = "patrol"; break;
     case "launcher": o.angle = 0; break;
+    case "plunger": o.angle = 90; break;
     case "text": o.text = "Hint text"; o.align = "center"; break;
   }
   return o;
@@ -534,11 +566,10 @@ function newObject(type, x, y){
 
 /* slide-rail semantics (applySlideRailConfig): numeric half-span sp,
    rail from anchor−sp to anchor+sp along slideAngle (screen space),
-   pix = −sp + objectPosition·2sp. Letters accepted via LEGACY_* tables. */
+   pix = −sp + objectPosition·2sp. */
 function slideSpan(o){
   const v = o.slideRange;
   if (typeof v === "number" && isFinite(v)) return v;
-  if (typeof v === "string" && CFG.LEGACY_SLIDER_SPANS[v] != null) return CFG.LEGACY_SLIDER_SPANS[v];
   return CFG.DEFAULT_SLIDER_SPAN;
 }
 function slidePix(o, pos){
@@ -555,28 +586,39 @@ function barEndpointsScreen(cx,cy,len,angleDeg){
   const a = rad(angleDeg), h = len/2, c = Math.cos(a), s = Math.sin(a);
   return [cx-c*h, cy-s*h, cx+c*h, cy+s*h];
 }
-function speedTableForType(type){
-  if (type === "sweeper") return CFG.LEGACY_SWEEPER_SPEEDS;
-  if (type === "toggle_wall") return CFG.LEGACY_TOGGLE_INTERVALS;
-  if (type === "crawler") return CFG.CRAWLER_SPEEDS;
-  return CFG.LEGACY_MOVING_SPEEDS;
+/* Inspector quick-preset buttons (S/M/L, S/M/F). Editor-only shortcuts: a
+   button writes the number, and level data never stores the letter. */
+const PRESETS = {
+  wallLength:         {S:50,    M:70,    L:100},
+  deflectorLength:    {S:55,    M:75,    L:100},
+  slideRange:         {S:40,    M:60,    L:90},
+  deflectorAutoSpeed: {S:0.8,   M:1,     F:1.3},    // deg/frame
+  toggleInterval:     {S:210,   M:150,   F:105},    // frames between snaps
+  slideAutoSpeed:     {S:0.005, M:0.008, F:0.012},  // position/frame
+  crawlerSpeed:       {S:0.8,   M:1.2,   F:1.8},    // px/frame
+};
+// speed only drives motion "auto" (plus toggle_wall's interval and crawlers):
+// an auto deflector sweeps in °/frame, an auto slider ping-pongs in position/frame.
+function speedPresetsForType(type){
+  if (type === "deflector") return PRESETS.deflectorAutoSpeed;
+  if (type === "toggle_wall") return PRESETS.toggleInterval;
+  if (type === "crawler") return PRESETS.crawlerSpeed;
+  return PRESETS.slideAutoSpeed;
 }
 function defaultSpeedForType(type){
-  if (type === "sweeper") return CFG.DEFAULT_SWEEPER_SPEED;
+  if (type === "deflector") return CFG.DEFAULT_SWEEPER_SPEED;
   if (type === "toggle_wall") return CFG.DEFAULT_TOGGLE_INTERVAL;
   if (type === "crawler") return CFG.DEFAULT_CRAWLER_SPEED;
   return CFG.DEFAULT_MOVING_SPEED;
 }
 function resolveSpeed(type, raw){
   if (typeof raw === "number" && isFinite(raw)) return raw;
-  const tbl = speedTableForType(type);
-  if (typeof raw === "string" && tbl[raw] != null) return tbl[raw];
   return defaultSpeedForType(type);
 }
+// Absent speed: a follow crawler defaults slower than patrol / ambush (entities.lua).
 function resolveCrawlerSpeed(raw, mode){
-  if ((raw == null || raw === "") && mode === "follow")
-    return CFG.DEFAULT_CRAWLER_FOLLOW_SPEED ?? 0.8;
-  return resolveSpeed("crawler", raw);
+  if (typeof raw === "number" && isFinite(raw)) return raw;
+  return mode === "follow" ? CFG.DEFAULT_CRAWLER_FOLLOW_SPEED : CFG.DEFAULT_CRAWLER_SPEED;
 }
 function crawlerModeOf(raw){
   return (raw === "follow" || raw === "ambush") ? raw : "patrol";
@@ -605,14 +647,12 @@ const EXPORT_SPEC = {
   hazard:       {l1:["x","y","radius"], l2:[]},
   wall:         {l1:["x","y","length","angle","width"], l2:[]},
   peg:          {l1:["x","y","radius"], l2:[]},
-  deflector:    {l1:["x","y","length","angle","gravity","group"], l2:[]},
+  deflector:    {l1:["x","y","length","angle","motion","group"], l2:["minAngle","maxAngle","speed"]},
   launcher:     {l1:["x","y","angle"], l2:[]},
-  sweeper:      {l1:["x","y","length","angle"], l2:["minAngle","maxAngle","speed"]},
+  plunger:      {l1:["x","y","angle"], l2:["power"]},
   toggle_wall:  {l1:["x","y","length","angle"], l2:["angleStep","speed"]},
-  sliding_wall: {l1:["x","y","length","angle"], l2:["slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"]},
-  moving_wall:  {l1:["x","y","length","angle"], l2:["slideAngle","slideRange","objectPosition","speed"]},
-  moving_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","speed"]},
-  sliding_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"]},
+  sliding_wall: {l1:["x","y","length","angle"], l2:["slideAngle","slideRange","objectPosition","motion","group","plateId","pressedPosition","speed"]},
+  sliding_hazard:{l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","motion","group","plateId","pressedPosition","speed"]},
   pressure_plate:{l1:["x","y","length","angle"], l2:["link","mode","holdFrames"]},
   ballast:      {l1:["x","y","radius"], l2:["slideAngle","slideRange","objectPosition","group"]},
   crawler:      {l1:["x","y","radius"], l2:["direction","startPosition","speed","mode"]},
@@ -624,9 +664,20 @@ function fmtParam(key, val){
   if (typeof val === "boolean") return key + " = " + (val ? "true" : "false");
   return key + " = " + fmtNum(val);
 }
+/** Motion keys the export leaves out: the type-default motion (the game fills
+    it), and speed / sweep limits that only an auto mover reads. A decoded
+    share code carries codec defaults for those even when static. */
+function exportSkipsMotionKey(o, k){
+  if (defaultMotionOf(o.type) == null) return false;
+  if (k === "motion") return motionOf(o) === defaultMotionOf(o.type);
+  if (k === "speed") return motionOf(o) !== "auto";
+  if (k === "minAngle" || k === "maxAngle") return o.type === "deflector" && motionOf(o) !== "auto";
+  return false;
+}
 
 function exportLevel(level){
   const objs = level.objects;
+  for (const o of objs) foldLegacyGravity(o);
   const specs = objs.map(o => EXPORT_SPEC[o.type] || {l1:["x","y"],l2:[]});
   const typeF = objs.map(o => luaStr(o.type) + ",");
   const typeW = Math.max(0, ...typeF.map(s=>s.length));
@@ -664,6 +715,8 @@ function exportLevel(level){
     const l2keys = spec.l2.filter(k => {
       if (o[k] === undefined) return false;
       if (k === "mode" && (o.mode == null || o.mode === "patrol")) return false;
+      if (k === "group" && o[k] !== "L" && o[k] !== "R") return false;
+      if (exportSkipsMotionKey(o, k)) return false;
       return true;
     });
     const hasL2 = l2keys.length > 0 || (extras.length > 0 && spec.l2.length > 0);
@@ -674,8 +727,8 @@ function exportLevel(level){
       if (o[k] === undefined) continue;
       // Default wall width is implicit (CLING_WALL_WIDTH=10); omit from export.
       if (k === "width" && o.type === "wall" && o[k] === CFG.WALL_WIDTH) continue;
-      if (k === "gravity" && o[k] !== true) continue;
       if (k === "group" && o[k] !== "L" && o[k] !== "R") continue;
+      if (exportSkipsMotionKey(o, k)) continue;
       if (k === "x"){
         parts.push("x = " + (xVals[i]+",").padEnd(xW+1));
       } else if (k === "y"){
@@ -814,8 +867,7 @@ function parseLuaText(src){
   return parseTable();
 }
 
-// slideRange/speed intentionally omitted: letter strings must survive for legacy conversion.
-const NUMERIC_KEYS = new Set(["x","y","length","angle","width","radius","minAngle","maxAngle","angleStep","slideAngle","objectPosition","slidePosition","minSlide","maxSlide","slideOffset","maxOpen","direction","startPosition","link","holdFrames","plateId","pressedPosition"]);
+const NUMERIC_KEYS = new Set(["x","y","length","angle","width","radius","minAngle","maxAngle","angleStep","slideAngle","slideRange","objectPosition","speed","direction","startPosition","link","holdFrames","plateId","pressedPosition"]);
 const KNOWN_KEYS = {
   spawn:["x","y"],
   exit:["x","y"],
@@ -823,14 +875,12 @@ const KNOWN_KEYS = {
   hazard:["x","y","radius"],
   wall:["x","y","length","angle","width"],
   peg:["x","y","radius"],
-  deflector:["x","y","length","angle","gravity","group"],
+  deflector:["x","y","length","angle","motion","group","minAngle","maxAngle","speed"],
   launcher:["x","y","angle"],
-  sweeper:["x","y","length","angle","minAngle","maxAngle","speed"],
+  plunger:["x","y","angle","power"],
   toggle_wall:["x","y","length","angle","angleStep","speed"],
-  sliding_wall:["x","y","length","angle","slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"],
-  moving_wall:["x","y","length","angle","slideAngle","slideRange","objectPosition","speed"],
-  moving_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","speed"],
-  sliding_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"],
+  sliding_wall:["x","y","length","angle","slideAngle","slideRange","objectPosition","motion","group","plateId","pressedPosition","speed"],
+  sliding_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","motion","group","plateId","pressedPosition","speed"],
   ballast:["x","y","radius","slideAngle","slideRange","objectPosition","group"],
   pressure_plate:["x","y","length","angle","link","mode","holdFrames"],
   crawler:["x","y","radius","direction","startPosition","speed","mode"],
@@ -853,14 +903,12 @@ const LEVEL_CODEC = {
   hazard:["x","y","radius"],
   wall:["x","y","length","angle","width"],
   peg:["x","y","radius"],
-  deflector:["x","y","length","angle","gravity","group"],
+  deflector:["x","y","length","angle","motion","group","minAngle","maxAngle","speed"],
   launcher:["x","y","angle"],
-  sweeper:["x","y","length","angle","minAngle","maxAngle","speed"],
+  plunger:["x","y","angle","power"],
   toggle_wall:["x","y","length","angle","angleStep","speed"],
-  sliding_wall:["x","y","length","angle","slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"],
-  moving_wall:["x","y","length","angle","slideAngle","slideRange","objectPosition","speed"],
-  moving_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","speed"],
-  sliding_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","group","plateId","pressedPosition"],
+  sliding_wall:["x","y","length","angle","slideAngle","slideRange","objectPosition","motion","group","plateId","pressedPosition","speed"],
+  sliding_hazard:["x","y","radius","slideAngle","slideRange","objectPosition","motion","group","plateId","pressedPosition","speed"],
   ballast:["x","y","radius","slideAngle","slideRange","objectPosition","group"],
   pressure_plate:["x","y","length","angle","link","mode","holdFrames"],
   crawler:["x","y","radius","direction","startPosition","speed","mode"],
@@ -875,11 +923,9 @@ const LEVEL_CODEC = {
   peg:"pg",
   deflector:"df",
   launcher:"ln",
-  sweeper:"sw",
+  plunger:"pu",
   toggle_wall:"tw",
   sliding_wall:"sl",
-  moving_wall:"mw",
-  moving_hazard:"mh",
   sliding_hazard:"sh",
   ballast:"ba",
   pressure_plate:"pp",
@@ -895,11 +941,9 @@ const LEVEL_CODEC = {
   "pg":"peg",
   "df":"deflector",
   "ln":"launcher",
-  "sw":"sweeper",
+  "pu":"plunger",
   "tw":"toggle_wall",
   "sl":"sliding_wall",
-  "mw":"moving_wall",
-  "mh":"moving_hazard",
   "sh":"sliding_hazard",
   "ba":"ballast",
   "pp":"pressure_plate",
@@ -910,23 +954,21 @@ const LEVEL_CODEC = {
   hazard:{radius:15},
   wall:{length:70,angle:0,width:10},
   peg:{radius:40},
-  deflector:{length:75,angle:0},
+  deflector:{length:75,angle:0,motion:"static",minAngle:0,maxAngle:90,speed:1},
   launcher:{angle:0},
-  sweeper:{length:70,angle:0,minAngle:0,maxAngle:90,speed:1},
+  plunger:{angle:90},
   toggle_wall:{length:70,angle:0,angleStep:45,speed:150},
-  sliding_wall:{length:70,angle:0,slideAngle:0,slideRange:60,objectPosition:0.5},
-  moving_wall:{length:70,angle:0,slideAngle:0,slideRange:60,objectPosition:0.5,speed:0.008},
-  moving_hazard:{radius:15,slideAngle:0,slideRange:60,objectPosition:0.5,speed:0.008},
-  sliding_hazard:{radius:15,slideAngle:0,slideRange:60,objectPosition:0.5},
+  sliding_wall:{length:70,angle:0,slideAngle:0,slideRange:60,objectPosition:0.5,motion:"gravity",speed:0.008},
+  sliding_hazard:{radius:15,slideAngle:0,slideRange:60,objectPosition:0.5,motion:"gravity",speed:0.008},
   ballast:{radius:10,slideAngle:0,slideRange:60,objectPosition:0.5},
   pressure_plate:{length:40,angle:0,link:1,mode:"hold",holdFrames:60},
-  crawler:{radius:10,direction:1,startPosition:0,speed:"M",mode:"patrol"},
+  crawler:{radius:10,direction:1,startPosition:0,mode:"patrol"},
   text:{text:"Hint text",angle:0},
 },
-  NUMERIC_KEYS: new Set(["angle","angleStep","direction","far","holdFrames","length","link","maxAngle","maxOpen","maxSlide","minAngle","minSlide","near","objectPosition","plateId","pressedPosition","radius","slideAngle","slideOffset","slidePosition","startPosition","width","x","y"]),
+  NUMERIC_KEYS: new Set(["angle","angleStep","direction","far","holdFrames","length","link","maxAngle","minAngle","near","objectPosition","plateId","power","pressedPosition","radius","slideAngle","slideRange","speed","startPosition","width","x","y"]),
   POS01_KEYS: new Set(["objectPosition","startPosition"]),
-  LETTER_OR_NUMBER_KEYS: new Set(["slideRange","speed"]),
-  STRING_KEYS: new Set(["align","group","mode","text"]),
+  STRING_KEYS: new Set(["align","group","mode","motion","text"]),
+  MOTIONS: {deflector:new Set(["auto","crank","gravity","static"]),sliding_wall:new Set(["auto","crank","gravity","plate"]),sliding_hazard:new Set(["auto","crank","gravity","plate"])},
   BORDER_ORDER: ["top","bottom","left","right"],
   BORDER_TO_CHAR: {full:"f",spikes:"s",open:"o"},
   CHAR_TO_BORDER: {f:"full",s:"spikes",o:"open"},
@@ -978,10 +1020,6 @@ const LEVEL_CODEC = {
   },
   formatValue(key, val){
     if (this.POS01_KEYS.has(key)) return this.fmtPos01(val);
-    if (this.LETTER_OR_NUMBER_KEYS.has(key)){
-      if (typeof val === "string") return this.escape(val);
-      return this.fmtNum(val);
-    }
     if (this.STRING_KEYS.has(key) || typeof val === "string") return this.escape(val);
     if (typeof val === "boolean") return val ? "true" : "false";
     if (typeof val === "number") return this.fmtNum(val);
@@ -989,18 +1027,6 @@ const LEVEL_CODEC = {
   },
   parseValue(key, raw){
     if (raw == null || raw === "") return undefined;
-    if (key === "gravity"){
-      const u = this.unescape(raw);
-      if (u === "true" || u === "L" || u === "R") return true;
-      if (u === "false") return false;
-      throw new Error("bad gravity: " + raw);
-    }
-    if (this.LETTER_OR_NUMBER_KEYS.has(key)){
-      const u = this.unescape(raw);
-      if (/^[A-Za-z]$/.test(u)) return u;
-      const n = Number(u);
-      return Number.isFinite(n) ? n : u;
-    }
     if (this.STRING_KEYS.has(key)) return this.unescape(raw);
     if (this.NUMERIC_KEYS.has(key) || this.POS01_KEYS.has(key)){
       const n = Number(raw);
@@ -1031,8 +1057,7 @@ const LEVEL_CODEC = {
     return {ok:true, borders};
   },
   encodeObject(o){
-    let typ = o.type;
-    if (typ === "coin") typ = "key";
+    const typ = o.type;
     const code = this.TYPE_TO_CODE[typ];
     if (!code) throw new Error("unknown object type: " + typ);
     const keys = this.KEYS[typ];
@@ -1041,18 +1066,13 @@ const LEVEL_CODEC = {
     for (let i = 0; i < keys.length; i++){
       const key = keys[i];
       let val = o[key];
-      // Group is only L or R. Gravity false stays empty; L/R in the
-      // gravity cell means on (legacy), never a crank group.
+      // Group is only L or R. An empty cell still holds the plateId slot.
       const grouped = key === "group" && (val === "L" || val === "R");
-      const gravityOn = val === true || val === "true" || val === "L" || val === "R";
       if (key === "group" && !grouped){
-        fields.push("");
-      } else if (key === "gravity" && !gravityOn){
         fields.push("");
       } else if (val === undefined || val === null || this.isDefault(typ, key, val)){
         fields.push("");
       } else {
-        if (key === "gravity") val = true;
         if (grouped) val = val === "R" ? "R" : "L";
         fields.push(this.formatValue(key, val));
         lastPresent = i + 1;
@@ -1084,10 +1104,9 @@ const LEVEL_CODEC = {
         } else o[key] = val;
       }
     }
-    // Follow's omitted speed is S, not the patrol default M.
-    if (typ === "crawler" && o.mode === "follow"){
-      const speedRaw = parts[7];
-      if (speedRaw === undefined || speedRaw === "") o.speed = undefined;
+    const motions = this.MOTIONS[typ];
+    if (motions && !motions.has(o.motion)){
+      return {ok:false, err:typ + ": bad motion '" + o.motion + "'"};
     }
     return {ok:true, obj:o};
   },
@@ -1100,11 +1119,7 @@ const LEVEL_CODEC = {
     if (typeof par === "number" && isFinite(par) && par >= 0){
       parts.push("par=" + this.fmtNum(par));
     }
-    // Legacy names: "gravity" is written as gravityflip; "nogravity" /
-    // "crank" are standard, the default, so they drop out.
-    let mode = level.mode;
-    if (mode === "gravity") mode = "gravityflip";
-    else if (mode === "nogravity" || mode === "crank") mode = this.DEFAULT_LEVEL_MODE;
+    const mode = level.mode;
     if (typeof mode === "string" && mode !== "" && mode !== this.DEFAULT_LEVEL_MODE){
       parts.push("mode=" + this.escape(mode));
     }
@@ -1156,7 +1171,7 @@ const LEVEL_CODEC = {
       throw new Error("object count " + objs.length + " exceeds MAX_OBJECTS " + this.MAX_OBJECTS);
     }
     const recs = objs.map(o => this.encodeObject(o));
-    const parts = [this.VERSION, this.escape(name), "", borders, recs.join(";")];
+    const parts = [this.VERSION, this.escape(name), borders, recs.join(";")];
     const extras = this.encodeExtras(level);
     if (extras) parts.push(extras);
     const s = parts.join("|");
@@ -1170,16 +1185,16 @@ const LEVEL_CODEC = {
     s = s.trim();
     if (s.length > this.MAX_BYTES) return {ok:false, err:"share code exceeds MAX_BYTES"};
     const fields = s.split("|");
-    if (fields.length < 5) return {ok:false, err:"expected at least 5 pipe fields"};
+    if (fields.length < 4) return {ok:false, err:"expected at least 4 pipe fields"};
     if (fields[0] !== this.VERSION){
       return {ok:false, err:"unsupported format '" + fields[0] + "'"};
     }
     let name = this.unescape(fields[1]);
     if (name.length > this.MAX_NAME) name = name.slice(0, this.MAX_NAME);
-    const br = this.decodeBorders(fields[3]);
+    const br = this.decodeBorders(fields[2]);
     if (!br.ok) return {ok:false, err:br.err};
     const objects = [];
-    const objField = fields[4] || "";
+    const objField = fields[3] || "";
     if (objField !== ""){
       for (const rec of objField.split(";")){
         if (!rec) continue;
@@ -1194,41 +1209,15 @@ const LEVEL_CODEC = {
     const level = {
       name, tutorial: "", borders: br.borders, objects,
     };
-    if (fields[5]){
-      const extras = this.decodeExtras(fields[5]);
+    if (fields[4]){
+      const extras = this.decodeExtras(fields[4]);
       if (extras.tutorial) level.tutorial = extras.tutorial;
       if (extras.par_frames != null) level.par_frames = extras.par_frames;
       if (extras.mode) level.mode = extras.mode;
       if (extras.world) level.world = extras.world;
       if (extras._extras) level._extras = extras._extras;
     }
-    // Legacy center-origin → bottom-left when any object x/y is negative.
-    this.migrateLegacyOrigin(level);
     return {ok:true, level};
-  },
-  migrateLegacyOrigin(level){
-    const objects = level.objects || [];
-    let legacy = false;
-    for (const o of objects){
-      if ((typeof o.x === "number" && o.x < 0) || (typeof o.y === "number" && o.y < 0)
-          || (typeof o.pivotX === "number" && o.pivotX < 0)
-          || (typeof o.pivotY === "number" && o.pivotY < 0)){
-        legacy = true;
-        break;
-      }
-    }
-    if (!legacy) return;
-    let w = this.DEFAULT_WORLD.w, h = this.DEFAULT_WORLD.h;
-    if (level.world && typeof level.world.w === "number" && typeof level.world.h === "number"){
-      w = level.world.w; h = level.world.h;
-    }
-    const ox = w / 2, oy = h / 2;
-    for (const o of objects){
-      if (typeof o.x === "number") o.x += ox;
-      if (typeof o.y === "number") o.y += oy;
-      if (typeof o.pivotX === "number") o.pivotX += ox;
-      if (typeof o.pivotY === "number") o.pivotY += oy;
-    }
   },
 };
 
@@ -1257,10 +1246,9 @@ function importLevelFromLua(text){
     borders: defaultBorders(),
     objects: [],
   };
-  // Omitted / empty / unknown → standard; legacy names collapse (levelModeOf).
+  // Omitted / empty / unknown → standard (levelModeOf).
   level.mode = levelModeOf({mode: lt.map.mode});
-  if (typeof lt.map.mode === "string" && lt.map.mode !== "" && lt.map.mode !== level.mode
-      && lt.map.mode !== "gravity" && lt.map.mode !== "nogravity" && lt.map.mode !== "crank"){
+  if (typeof lt.map.mode === "string" && lt.map.mode !== "" && lt.map.mode !== level.mode){
     notes.push(`Unknown mode "${lt.map.mode}" plays as standard.`);
   }
   if (lt.map.world && lt.map.world.__table){
@@ -1272,31 +1260,18 @@ function importLevelFromLua(text){
   if (lt.map.keysRequired !== undefined){
     notes.push("Dropped level keysRequired (key count is derived from key objects).");
   }
-  // Accept borders{}, or one-shot migrate old ceiling / spikedEdges pastes.
   if (lt.map.borders && lt.map.borders.__table){
     const bm = lt.map.borders.map;
     for (const edge of ARENA_EDGE_NAMES){
       if (typeof bm[edge] === "string") level.borders[edge] = normalizeBorderMode(bm[edge]);
     }
-  } else if (typeof lt.map.ceiling === "string" || (lt.map.spikedEdges && lt.map.spikedEdges.__table)){
-    level.ceiling = typeof lt.map.ceiling === "string" ? lt.map.ceiling : "full";
-    if (lt.map.spikedEdges && lt.map.spikedEdges.__table){
-      level.spikedEdges = lt.map.spikedEdges.arr.filter(v => typeof v === "string");
-    }
-    migrateLegacyBorders(level);
-    notes.push("Converted legacy ceiling/spikedEdges → borders.");
   }
   const objsT = lt.map.objects;
   if (!objsT || !objsT.__table) throw new Error("'objects' is not a table.");
   for (const item of objsT.arr){
     if (!item || !item.__table){ notes.push("Skipped a non-table entry in objects."); continue; }
     const m = item.map;
-    let type = m.type;
-    // Accept legacy type="coin"; always store/export as key.
-    if (type === "coin"){
-      type = "key";
-      notes.push("Converted legacy type \"coin\" → \"key\".");
-    }
+    const type = m.type;
     if (typeof type !== "string" || !EXPORT_SPEC[type]){
       notes.push("Skipped unsupported object type: " + JSON.stringify(m.type));
       continue;
@@ -1316,80 +1291,26 @@ function importLevelFromLua(text){
       if (known.has(k)) o[k] = val;
       else { (o._extra = o._extra || {})[k] = val; }
     }
-    // legacy conversions (mirrors applySlideRailConfig / resolveMotionSpeed)
+    // slide-rail defaults (mirrors applySlideRailConfig)
     if (SLIDE_TYPES.has(type)){
-      if (o.slideRange === undefined){
-        const ex = o._extra || {};
-        if (ex.minSlide !== undefined || ex.maxSlide !== undefined){
-          const mn = ex.minSlide !== undefined ? ex.minSlide : -CFG.DEFAULT_SLIDER_SPAN;
-          const mx = ex.maxSlide !== undefined ? ex.maxSlide : CFG.DEFAULT_SLIDER_SPAN;
-          o.slideRange = Math.max(Math.abs(mn), Math.abs(mx));
-          delete ex.minSlide; delete ex.maxSlide;
-          notes.push(type+": converted legacy minSlide/maxSlide to slideRange "+o.slideRange+".");
-        } else o.slideRange = CFG.DEFAULT_SLIDER_SPAN;
-      } else if (typeof o.slideRange === "string"){
-        const n = CFG.LEGACY_SLIDER_SPANS[o.slideRange];
-        if (n != null){
-          notes.push(type+": converted slideRange \""+o.slideRange+"\" → "+n+".");
-          o.slideRange = n;
-        } else {
-          o.slideRange = CFG.DEFAULT_SLIDER_SPAN;
-          notes.push(type+": unknown slideRange letter; using "+o.slideRange+".");
-        }
-      }
-      if (o.objectPosition === undefined){
-        const ex = o._extra || {};
-        if (ex.slidePosition !== undefined){ o.objectPosition = ex.slidePosition; delete ex.slidePosition; }
-        else o.objectPosition = 0.5;
-      }
+      if (o.slideRange === undefined) o.slideRange = CFG.DEFAULT_SLIDER_SPAN;
+      if (o.objectPosition === undefined) o.objectPosition = 0.5;
       o.objectPosition = Math.max(0, Math.min(1, o.objectPosition));
       if (o.slideAngle === undefined) o.slideAngle = 0;
     }
-    if ("speed" in o){
-      if (typeof o.speed === "string"){
-        const tbl = speedTableForType(type);
-        const n = tbl[o.speed];
-        if (n != null){
-          notes.push(type+": converted speed \""+o.speed+"\" → "+n+".");
-          o.speed = n;
-        } else {
-          o.speed = defaultSpeedForType(type);
-          notes.push(type+": unknown speed letter; using "+o.speed+".");
-        }
-      }
-      // numeric speed kept as-is (never snap to a letter)
-    }
-    // legacy size letter → length (when length omitted)
-    if (o.length === undefined && o._extra && typeof o._extra.size === "string"){
-      const szTbl = (type === "deflector") ? CFG.LEGACY_DEFLECTOR_SIZES : CFG.LEGACY_WALL_SIZES;
-      const n = szTbl[o._extra.size];
-      if (n != null){
-        o.length = n;
-        notes.push(type+": converted size \""+o._extra.size+"\" → length "+n+".");
-        delete o._extra.size;
+    // gravity=true is not a field. Fold it into motion before the default
+    // fill, or a deflector with only that boolean becomes static.
+    foldLegacyGravity(o, notes);
+    // motion is how a deflector / slider moves. Omitted means the type default
+    // (deflector static, sliders gravity).
+    if (defaultMotionOf(type) != null){
+      if (o.motion === undefined) o.motion = defaultMotionOf(type);
+      if (!MOTION_ORDER[type].includes(o.motion)){
+        notes.push(type+": unknown motion \""+o.motion+"\"; using "+defaultMotionOf(type)+".");
+        o.motion = defaultMotionOf(type);
       }
     }
-    if (o._extra && Object.keys(o._extra).length === 0) delete o._extra;
-    // Deflector gravity is opt-in. Legacy gravity "L"/"R" means tilt.
-    // group "L"/"R" is a crank group and wins over gravity.
-    let deflectorGravity = null;
-    if (type === "deflector"){
-      const gv = m.gravity;
-      const grouped = (o.group === "L" || o.group === "R") ? o.group : null;
-      if (grouped){
-        o.group = grouped;
-        deflectorGravity = false;
-      } else if (gv === true || gv === "true" || gv === "L" || gv === "R"){
-        deflectorGravity = true;
-        delete o.group;
-      } else {
-        deflectorGravity = false;
-        delete o.group;
-      }
-      delete o.gravity;
-      if (o._extra) delete o._extra.group;
-    }
-    if (type === "sliding_wall" || type === "sliding_hazard" || type === "ballast"){
+    if (CRANKABLE.has(type) || type === "ballast"){
       if (o.group !== "L" && o.group !== "R") delete o.group;
       if (o._extra) delete o._extra.group;
     }
@@ -1397,18 +1318,13 @@ function importLevelFromLua(text){
     // fill required defaults (same as game constructors)
     const d = newObject(type, o.x ?? 0, o.y ?? 0);
     for (const [k,v] of Object.entries(d)) if (o[k] === undefined) o[k] = v;
-    if (type === "deflector"){
-      if (deflectorGravity) o.gravity = true;
-      else delete o.gravity;
-    }
     level.objects.push(o);
   }
-  LEVEL_CODEC.migrateLegacyOrigin(level);
   return {level, notes};
 }
 
 /* ---------- built-in level library (verbatim from levels.lua) ---------- */
-const BUILTIN_LEVELS = [{"n":1,"name":"Learning the Ropes","lua":"{ name = \"Learning the Ropes\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" }, mode = \"scrollingworld\", world = { w = 1200, h = 240 },\n    objects = {\n    { type = \"spawn\", x = 35, y = 25 },\n    { type = \"exit\", x = 1130, y = 195 },\n    { type = \"deflector\", x = 185, y = 20, length = 300, angle = 0 },\n    { type = \"deflector\", x = 990, y = 85, length = 150, angle = 0 },\n    { type = \"deflector\", x = 385, y = 200, length = 100, angle = 0 },\n    { type = \"deflector\", x = 885, y = 200, length = 75, angle = 0 },\n    { type = \"deflector\", x = 470, y = 150, length = 100, angle = 0 },\n    { type = \"deflector\", x = 810, y = 150, length = 100, angle = 0 },\n    { type = \"deflector\", x = 555, y = 100, length = 100, angle = 0 },\n    { type = \"deflector\", x = 725, y = 100, length = 100, angle = 0 },\n    { type = \"deflector\", x = 640, y = 50, length = 100, angle = 0 },\n    { type = \"deflector\", x = 335, y = 110, length = 180, angle = 90 },\n    { type = \"text\", x = 165, y = 185, text = \"Crank = Roll\", align = \"center\" },\n    { type = \"text\", x = 460, y = 40, text = \"Down = Drop\", align = \"center\" },\n    { type = \"text\", x = 700, y = 200, text = \"Up = Jump\", align = \"center\" },\n    { type = \"text\", x = 1135, y = 40, text = \"Left = Control\", align = \"center\" },\n    { type = \"sliding_wall\", x = 1130, y = 130, length = 70, angle = 0, slideAngle = -90, slideRange = 50, objectPosition = 0.0, group = \"L\" },\n    { type = \"key\", x = 170, y = 30 },\n    { type = \"key\", x = 430, y = 160 },\n    { type = \"key\", x = 680, y = 110 },\n    { type = \"key\", x = 915, y = 210 },\n    { type = \"key\", x = 1130, y = 100 },\n  }}"},{"n":2,"name":"Step Down","lua":"{ name = \"Step Down\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 200, y = 184, text = \"Down = DROP\" },\n    { type = \"spawn\", x = 50, y = 190 },\n    { type = \"deflector\", x = 100, y = 190, length = 100, angle = 0 },\n    { type = \"deflector\", x = 200, y = 120, length = 140, angle = 0 },\n    { type = \"deflector\", x = 300, y = 50, length = 100, angle = 0 },\n    { type = \"key\", x = 140, y = 200 },\n    { type = \"key\", x = 200, y = 130 },\n    { type = \"key\", x = 265, y = 60 },\n    { type = \"exit\", x = 340, y = 50 },\n  }}"},{"n":3,"name":"Step Up","lua":"{ name = \"Step Up\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 200, y = 184, text = \"Up = JUMP\" },\n    { type = \"spawn\", x = 60, y = 70 },\n    { type = \"wall\", x = 200, y = 120, length = 140, angle = 0, width = 15 },\n    { type = \"wall\", x = 100, y = 55, length = 100, angle = 0, width = 15 },\n    { type = \"wall\", x = 300, y = 185, length = 100, angle = 0, width = 15 },\n    { type = \"key\", x = 140, y = 70 },\n    { type = \"key\", x = 200, y = 135 },\n    { type = \"key\", x = 260, y = 200 },\n    { type = \"exit\", x = 340, y = 195 },\n  }}"},{"n":4,"name":"Moving Pictures","lua":"{ name = \"Moving Pictures\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 60, y = 50 },\n    { type = \"deflector\", x = 65, y = 50, length = 60, angle = 0 },\n    { type = \"deflector\", x = 340, y = 60, length = 60, angle = 0 },\n    { type = \"deflector\", x = 340, y = 20, length = 60, angle = 0 },\n    { type = \"deflector\", x = 340, y = 100, length = 60, angle = 0 },\n    { type = \"deflector\", x = 340, y = 140, length = 60, angle = 0 },\n    { type = \"deflector\", x = 340, y = 180, length = 60, angle = 0 },\n    { type = \"key\", x = 100, y = 180 },\n    { type = \"key\", x = 170, y = 120 },\n    { type = \"key\", x = 340, y = 70 },\n    { type = \"exit\", x = 340, y = 190 },\n    { type = \"moving_wall\", x = 130, y = 110, length = 70, angle = 0, slideAngle = 0, slideRange = 60, objectPosition = 1.0, speed = 0.008 },\n    { type = \"moving_wall\", x = 130, y = 170, length = 70, angle = 0, slideAngle = 0, slideRange = 60, objectPosition = 0.0, speed = 0.008 },\n  }}"},{"n":5,"name":"Polka Dots","lua":"{ name = \"Polka Dots\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 65, y = 210 },\n    { type = \"key\", x = 260, y = 210 },\n    { type = \"key\", x = 30, y = 45 },\n    { type = \"key\", x = 360, y = 35 },\n    { type = \"exit\", x = 365, y = 195 },\n    { type = \"peg\", x = 65, y = 165, radius = 40 },\n    { type = \"peg\", x = 170, y = 155, radius = 20 },\n    { type = \"peg\", x = 365, y = 165, radius = 20 },\n    { type = \"peg\", x = 30, y = 75, radius = 20 },\n    { type = \"peg\", x = 220, y = 80, radius = 20 },\n    { type = \"peg\", x = 130, y = 70, radius = 40 },\n    { type = \"peg\", x = 260, y = 160, radius = 40 },\n    { type = \"peg\", x = 325, y = 70, radius = 40 },\n  }}"},{"n":6,"name":"Fling","lua":"{ name = \"Fling\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 50, y = 155 },\n    { type = \"key\", x = 200, y = 70 },\n    { type = \"exit\", x = 350, y = 185 },\n    { type = \"deflector\", x = 200, y = 60, length = 140, angle = 0, group = \"L\" },\n    { type = \"deflector\", x = 50, y = 150, length = 70, angle = 0 },\n    { type = \"wall\", x = 350, y = 170, length = 70, angle = 0, width = 15 },\n  }}"},{"n":7,"name":"Weeble Wobble","lua":"{ name = \"Weeble Wobble\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 145 },\n    { type = \"key\", x = 40, y = 110 },\n    { type = \"key\", x = 360, y = 110 },\n    { type = \"key\", x = 200, y = 150 },\n    { type = \"exit\", x = 350, y = 185 },\n    { type = \"deflector\", x = 200, y = 90, length = 120, angle = 0, group = \"L\" },\n    { type = \"deflector\", x = 40, y = 145, length = 70, angle = 0 },\n    { type = \"deflector\", x = 350, y = 80, length = 70, angle = 330 },\n    { type = \"deflector\", x = 50, y = 80, length = 70, angle = 30 },\n    { type = \"deflector\", x = 350, y = 185, length = 70, angle = 0 },\n  }}"},{"n":8,"name":"Stub 8","lua":"{ name = \"Stub 8\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":9,"name":"Stub 9","lua":"{ name = \"Stub 9\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":10,"name":"Stub 10","lua":"{ name = \"Stub 10\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":11,"name":"Bridge to Somewhere","lua":"{ name = \"Bridge to Somewhere\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 200, y = 184, text = \"Roll the plate. Beat the door.\" },\n    { type = \"spawn\", x = 50, y = 190 },\n    { type = \"deflector\", x = 50, y = 185, length = 50, angle = 0 },\n    { type = \"deflector\", x = 315, y = 135, length = 50, angle = 0 },\n    { type = \"pressure_plate\", x = 50, y = 90, length = 36, angle = 0, link = 1, mode = \"trigger\", holdFrames = 40 },\n    { type = \"sliding_wall\", x = 235, y = 90, length = 60, angle = 0, slideAngle = 0, slideRange = 80, objectPosition = 1.0, plateId = 1, pressedPosition = 0 },\n    { type = \"key\", x = 50, y = 130 },\n    { type = \"key\", x = 200, y = 105 },\n    { type = \"exit\", x = 315, y = 135 },\n  }}"},{"n":12,"name":"Bridge Me","lua":"{ name = \"Bridge Me\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 200, y = 184, text = \"Roll the plate. Beat the door.\" },\n    { type = \"spawn\", x = 50, y = 190 },\n    { type = \"deflector\", x = 50, y = 185, length = 50, angle = 0 },\n    { type = \"deflector\", x = 315, y = 135, length = 50, angle = 0 },\n    { type = \"pressure_plate\", x = 25, y = 90, length = 36, angle = 90, link = 1, mode = \"hold\", holdFrames = 40 },\n    { type = \"sliding_wall\", x = 235, y = 90, length = 60, angle = 0, slideAngle = 0, slideRange = 80, objectPosition = 1.0, plateId = 1, pressedPosition = 0 },\n    { type = \"ballast\", x = 60, y = 90, radius = 10, slideAngle = 0, slideRange = 30, objectPosition = 1.0 },\n    { type = \"key\", x = 50, y = 130 },\n    { type = \"key\", x = 200, y = 105 },\n    { type = \"exit\", x = 315, y = 135 },\n  }}"},{"n":13,"name":"Counterweight","lua":"{ name = \"Counterweight\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 45, y = 50 },\n    { type = \"deflector\", x = 75, y = 50, length = 80, angle = 0 },\n    { type = \"sliding_wall\", x = 200, y = 210, length = 80, angle = 0, slideAngle = 0, slideRange = 120, objectPosition = 1.0, plateId = 1, pressedPosition = 0 },\n    { type = \"deflector\", x = 325, y = 50, length = 80, angle = 0 },\n    { type = \"ballast\", x = 200, y = 140, radius = 10, slideAngle = 0, slideRange = 50, objectPosition = 0.0 },\n    { type = \"pressure_plate\", x = 255, y = 140, length = 28, angle = -90, link = 1, mode = \"hold\" },\n    { type = \"key\", x = 195, y = 195 },\n    { type = \"exit\", x = 360, y = 50 },\n  }}"},{"n":14,"name":"Stub 14","lua":"{ name = \"Stub 14\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":15,"name":"Stub 15","lua":"{ name = \"Stub 15\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":16,"name":"Hazardous","lua":"{ name = \"Hazardous\", mode = \"gravityflip\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 50, y = 75 },\n    { type = \"key\", x = 200, y = 80 },\n    { type = \"exit\", x = 350, y = 70 },\n    { type = \"deflector\", x = 200, y = 70, length = 320, angle = 0 },\n    { type = \"sliding_hazard\", x = 200, y = 125, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0 },\n    { type = \"text\", x = 200, y = 35, text = \"Hello Friend\", align = \"center\", angle = 180 },\n  }}"},{"n":17,"name":"Moon Landing","lua":"{ name = \"Moon Landing\", mode = \"gravityflip\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 200, y = 160 },\n    { type = \"key\", x = 30, y = 120 },\n    { type = \"key\", x = 370, y = 120 },\n    { type = \"key\", x = 200, y = 25 },\n    { type = \"exit\", x = 200, y = 220 },\n    { type = \"deflector\", x = 200, y = 220, length = 50, angle = 0 },\n    { type = \"deflector\", x = 200, y = 20, length = 100, angle = 0 },\n    { type = \"deflector\", x = 375, y = 120, length = 100, angle = 90 },\n    { type = \"deflector\", x = 25, y = 120, length = 100, angle = 90 },\n    { type = \"peg\", x = 200, y = 120, radius = 40 },\n  }}"},{"n":18,"name":"Meat Grinder","lua":"{ name = \"Meat Grinder\", mode = \"gravityflip\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 60, y = 50 },\n    { type = \"deflector\", x = 60, y = 50, length = 40, angle = 0 },\n    { type = \"deflector\", x = 340, y = 50, length = 40, angle = 0 },\n    { type = \"deflector\", x = 60, y = 170, length = 80, angle = 0, gravity = true },\n    { type = \"pressure_plate\", x = 90, y = 145, length = 24, angle = 0, link = 1, mode = \"hold\" },\n    { type = \"deflector\", x = 340, y = 170, length = 80, angle = 0, gravity = true },\n    { type = \"pressure_plate\", x = 310, y = 145, length = 24, angle = 0, link = 2, mode = \"hold\" },\n    { type = \"key\", x = 60, y = 180 },\n    { type = \"key\", x = 340, y = 180 },\n    { type = \"exit\", x = 340, y = 50 },\n    { type = \"sliding_hazard\", x = 110, y = 110, radius = 25, slideAngle = 0, slideRange = 50, objectPosition = 0.0, plateId = 1, pressedPosition = 1 },\n    { type = \"sliding_hazard\", x = 290, y = 110, radius = 25, slideAngle = 180, slideRange = 50, objectPosition = 0.0, plateId = 1, pressedPosition = 1 },\n    { type = \"sliding_hazard\", x = 200, y = 110, radius = 25, slideAngle = 90, slideRange = 60, objectPosition = 0.0, plateId = 2, pressedPosition = 1 },\n  }}"},{"n":19,"name":"Stub 19","lua":"{ name = \"Stub 19\", mode = \"gravityflip\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":20,"name":"Stub 20","lua":"{ name = \"Stub 20\", mode = \"gravityflip\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":21,"name":"Horizon","lua":"{ name = \"Horizon\", mode = \"scrollingworld\", world = { w = 1000, h = 240 }, borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"text\", x = 220, y = 80, text = \"The view follows.\" },\n    { type = \"spawn\", x = 60, y = 20 },\n    { type = \"key\", x = 340, y = 30 },\n    { type = \"key\", x = 600, y = 30 },\n    { type = \"key\", x = 860, y = 30 },\n    { type = \"exit\", x = 980, y = 100 },\n  }}"},{"n":22,"name":"The Climb","lua":"{ name = \"The Climb\", mode = \"scrollingworld\", world = { w = 400, h = 720 }, borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"text\", x = 200, y = 100, text = \"Climb. Keys on the walls and the ceiling.\" },\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"key\", x = 20, y = 360 },\n    { type = \"key\", x = 380, y = 510 },\n    { type = \"key\", x = 290, y = 700 },\n    { type = \"hazard\", x = 200, y = 360, radius = 20 },\n    { type = \"exit\", x = 200, y = 700 },\n  }}"},{"n":23,"name":"Over the Top","lua":"{ name = \"Over the Top\", mode = \"scrollingworld\", world = { w = 800, h = 480 }, borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"spikes\" },\n    objects = {\n    { type = \"text\", x = 210, y = 130, text = \"Ride left. Crank aims. Up fires.\" },\n    { type = \"spawn\", x = 250, y = 20 },\n    { type = \"launcher\", x = 70, y = 35, angle = 45 },\n    { type = \"key\", x = 600, y = 460 },\n    { type = \"key\", x = 200, y = 460 },\n    { type = \"exit\", x = 700, y = 20 },\n  }}"},{"n":24,"name":"Corners","lua":"{ name = \"Corners\", mode = \"scrollingworld\", world = { w = 800, h = 480 }, borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"text\", x = 400, y = 90, text = \"The keys are past the edges.\" },\n    { type = \"spawn\", x = 400, y = 20 },\n    { type = \"peg\", x = 400, y = 240, radius = 30 },\n    { type = \"key\", x = 100, y = 20 },\n    { type = \"key\", x = 20, y = 380 },\n    { type = \"key\", x = 780, y = 380 },\n    { type = \"exit\", x = 400, y = 460 },\n  }}"},{"n":25,"name":"The Long Way","lua":"{ name = \"The Long Way\", mode = \"scrollingworld\", world = { w = 1200, h = 600 }, borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"text\", x = 200, y = 100, text = \"Ride the walls. The middle bites.\" },\n    { type = \"spawn\", x = 60, y = 20 },\n    { type = \"key\", x = 600, y = 20 },\n    { type = \"key\", x = 1180, y = 300 },\n    { type = \"key\", x = 400, y = 580 },\n    { type = \"hazard\", x = 450, y = 220, radius = 20 },\n    { type = \"hazard\", x = 780, y = 360, radius = 20 },\n    { type = \"peg\", x = 600, y = 300, radius = 28 },\n    { type = \"exit\", x = 80, y = 580 },\n  }}"}];
+const BUILTIN_LEVELS = [{"n":1,"name":"Learning the Ropes","lua":"{ name = \"Learning the Ropes\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" }, mode = \"scrollingworld\", world = { w = 1200, h = 240 },\n    objects = {\n    { type = \"spawn\", x = 35, y = 25 },\n    { type = \"exit\", x = 1130, y = 195 },\n    { type = \"deflector\", x = 185, y = 20, length = 300, angle = 0 },\n    { type = \"deflector\", x = 990, y = 85, length = 150, angle = 0 },\n    { type = \"deflector\", x = 385, y = 200, length = 100, angle = 0 },\n    { type = \"deflector\", x = 885, y = 200, length = 75, angle = 0 },\n    { type = \"deflector\", x = 470, y = 150, length = 100, angle = 0 },\n    { type = \"deflector\", x = 810, y = 150, length = 100, angle = 0 },\n    { type = \"deflector\", x = 555, y = 100, length = 100, angle = 0 },\n    { type = \"deflector\", x = 725, y = 100, length = 100, angle = 0 },\n    { type = \"deflector\", x = 640, y = 50, length = 100, angle = 0 },\n    { type = \"deflector\", x = 335, y = 110, length = 180, angle = 90 },\n    { type = \"text\", x = 165, y = 185, text = \"[crank] Crank = Roll\", align = \"center\" },\n    { type = \"text\", x = 460, y = 40, text = \"[down] Down = Drop\", align = \"center\" },\n    { type = \"text\", x = 700, y = 200, text = \"[up] Up = Jump\", align = \"center\" },\n    { type = \"text\", x = 1135, y = 40, text = \"[left] Left = Control\", align = \"center\" },\n    { type = \"sliding_wall\", x = 1130, y = 130, length = 70, angle = 0, slideAngle = -90, slideRange = 50, objectPosition = 0.0, motion = \"crank\", group = \"L\" },\n    { type = \"key\", x = 170, y = 30 },\n    { type = \"key\", x = 430, y = 160 },\n    { type = \"key\", x = 680, y = 110 },\n    { type = \"key\", x = 915, y = 210 },\n    { type = \"key\", x = 1130, y = 100 },\n  }}"},{"n":2,"name":"Control Freak","lua":"{ name = \"Control Freak\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" }, mode = \"scrollingworld\", world = { w = 1200, h = 240 },\n    objects = {\n    { type = \"spawn\", x = 35, y = 25 },\n    { type = \"exit\", x = 880, y = 45 },\n    { type = \"text\", x = 65, y = 185, text = \"[left] Left = Control\", align = \"center\" },\n    { type = \"deflector\", x = 80, y = 20, length = 100, angle = 0 },\n    { type = \"deflector\", x = 170, y = 70, length = 100, angle = 0 },\n    { type = \"deflector\", x = 450, y = 175, length = 100, angle = 0, motion = \"crank\", group = \"L\" },\n    { type = \"deflector\", x = 805, y = 175, length = 100, angle = 0, motion = \"crank\", group = \"L\" },\n    { type = \"deflector\", x = 625, y = 100, length = 175, angle = 0, motion = \"crank\", group = \"L\" },\n    { type = \"deflector\", x = 1010, y = 75, length = 175, angle = 0, motion = \"crank\", group = \"L\" },\n    { type = \"sliding_wall\", x = 315, y = 120, length = 70, angle = 0, slideAngle = -90, slideRange = 50, objectPosition = 0.0, motion = \"crank\", group = \"L\" },\n    { type = \"key\", x = 170, y = 80 },\n    { type = \"key\", x = 450, y = 185 },\n    { type = \"key\", x = 805, y = 185 },\n    { type = \"key\", x = 625, y = 110 },\n    { type = \"key\", x = 1140, y = 185 },\n    { type = \"sliding_hazard\", x = 170, y = 45, radius = 15, slideAngle = 0, slideRange = 50, objectPosition = 0.0, motion = \"crank\", group = \"L\" },\n    { type = \"sliding_hazard\", x = 250, y = 135, radius = 15, slideAngle = 90, slideRange = 40, objectPosition = 0.0, motion = \"crank\", group = \"L\" },\n    { type = \"sliding_hazard\", x = 880, y = 140, radius = 15, slideAngle = -90, slideRange = 50, objectPosition = 0.0, motion = \"crank\", group = \"L\" },\n    { type = \"wall\", x = 1140, y = 165, length = 70, angle = 0, width = 20 },\n  }}"},{"n":3,"name":"Step Up","lua":"{ name = \"Step Up\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 200, y = 184, text = \"[up] = JUMP\" },\n    { type = \"spawn\", x = 60, y = 70 },\n    { type = \"wall\", x = 200, y = 120, length = 140, angle = 0, width = 15 },\n    { type = \"wall\", x = 100, y = 55, length = 100, angle = 0, width = 15 },\n    { type = \"wall\", x = 300, y = 185, length = 100, angle = 0, width = 15 },\n    { type = \"key\", x = 140, y = 70 },\n    { type = \"key\", x = 200, y = 135 },\n    { type = \"key\", x = 260, y = 200 },\n    { type = \"exit\", x = 340, y = 195 },\n  }}"},{"n":4,"name":"Moving Pictures","lua":"{ name = \"Moving Pictures\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 60, y = 50 },\n    { type = \"deflector\", x = 65, y = 50, length = 60, angle = 0 },\n    { type = \"deflector\", x = 340, y = 60, length = 60, angle = 0 },\n    { type = \"deflector\", x = 340, y = 20, length = 60, angle = 0 },\n    { type = \"deflector\", x = 340, y = 100, length = 60, angle = 0 },\n    { type = \"deflector\", x = 340, y = 140, length = 60, angle = 0 },\n    { type = \"deflector\", x = 340, y = 180, length = 60, angle = 0 },\n    { type = \"key\", x = 100, y = 180 },\n    { type = \"key\", x = 170, y = 120 },\n    { type = \"key\", x = 340, y = 70 },\n    { type = \"exit\", x = 340, y = 190 },\n    { type = \"sliding_wall\", x = 130, y = 110, length = 70, angle = 0, slideAngle = 0, slideRange = 60, objectPosition = 1.0, motion = \"auto\", speed = 0.008 },\n    { type = \"sliding_wall\", x = 130, y = 170, length = 70, angle = 0, slideAngle = 0, slideRange = 60, objectPosition = 0.0, motion = \"auto\", speed = 0.008 },\n  }}"},{"n":5,"name":"Polka Dots","lua":"{ name = \"Polka Dots\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 65, y = 210 },\n    { type = \"key\", x = 260, y = 210 },\n    { type = \"key\", x = 30, y = 45 },\n    { type = \"key\", x = 360, y = 35 },\n    { type = \"exit\", x = 365, y = 195 },\n    { type = \"peg\", x = 65, y = 165, radius = 40 },\n    { type = \"peg\", x = 170, y = 155, radius = 20 },\n    { type = \"peg\", x = 365, y = 165, radius = 20 },\n    { type = \"peg\", x = 30, y = 75, radius = 20 },\n    { type = \"peg\", x = 220, y = 80, radius = 20 },\n    { type = \"peg\", x = 130, y = 70, radius = 40 },\n    { type = \"peg\", x = 260, y = 160, radius = 40 },\n    { type = \"peg\", x = 325, y = 70, radius = 40 },\n  }}"},{"n":6,"name":"Spring Loaded","lua":"{ name = \"Spring Loaded\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 170, y = 190, text = \"Crank pulls. Up fires.\" },\n    { type = \"spawn\", x = 50, y = 155 },\n    { type = \"key\", x = 200, y = 70 },\n    { type = \"exit\", x = 350, y = 185 },\n    { type = \"deflector\", x = 215, y = 60, length = 170, angle = 0 },\n    { type = \"plunger\", x = 290, y = 60, angle = 90, power = 140 },\n    { type = \"deflector\", x = 50, y = 150, length = 70, angle = 0 },\n    { type = \"wall\", x = 350, y = 170, length = 70, angle = 0, width = 15 },\n  }}"},{"n":7,"name":"Weeble Wobble","lua":"{ name = \"Weeble Wobble\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 145 },\n    { type = \"key\", x = 40, y = 110 },\n    { type = \"key\", x = 360, y = 110 },\n    { type = \"key\", x = 200, y = 150 },\n    { type = \"exit\", x = 350, y = 185 },\n    { type = \"deflector\", x = 200, y = 90, length = 120, angle = 0, motion = \"crank\", group = \"L\" },\n    { type = \"deflector\", x = 40, y = 145, length = 70, angle = 0 },\n    { type = \"deflector\", x = 350, y = 80, length = 70, angle = 330 },\n    { type = \"deflector\", x = 50, y = 80, length = 70, angle = 30 },\n    { type = \"deflector\", x = 350, y = 185, length = 70, angle = 0 },\n  }}"},{"n":8,"name":"Stub 8","lua":"{ name = \"Stub 8\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":9,"name":"Stub 9","lua":"{ name = \"Stub 9\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":10,"name":"Stub 10","lua":"{ name = \"Stub 10\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":11,"name":"Bridge to Somewhere","lua":"{ name = \"Bridge to Somewhere\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 200, y = 184, text = \"Roll the plate. Beat the door.\" },\n    { type = \"spawn\", x = 50, y = 190 },\n    { type = \"deflector\", x = 50, y = 185, length = 50, angle = 0 },\n    { type = \"deflector\", x = 315, y = 135, length = 50, angle = 0 },\n    { type = \"pressure_plate\", x = 50, y = 90, length = 36, angle = 0, link = 1, mode = \"trigger\", holdFrames = 40 },\n    { type = \"sliding_wall\", x = 235, y = 90, length = 60, angle = 0, slideAngle = 0, slideRange = 80, objectPosition = 1.0, motion = \"plate\", plateId = 1, pressedPosition = 0 },\n    { type = \"key\", x = 50, y = 130 },\n    { type = \"key\", x = 200, y = 105 },\n    { type = \"exit\", x = 315, y = 135 },\n  }}"},{"n":12,"name":"Bridge Me","lua":"{ name = \"Bridge Me\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"text\", x = 200, y = 184, text = \"Roll the plate. Beat the door.\" },\n    { type = \"spawn\", x = 50, y = 190 },\n    { type = \"deflector\", x = 50, y = 185, length = 50, angle = 0 },\n    { type = \"deflector\", x = 315, y = 135, length = 50, angle = 0 },\n    { type = \"pressure_plate\", x = 25, y = 90, length = 36, angle = 90, link = 1, mode = \"hold\", holdFrames = 40 },\n    { type = \"sliding_wall\", x = 235, y = 90, length = 60, angle = 0, slideAngle = 0, slideRange = 80, objectPosition = 1.0, motion = \"plate\", plateId = 1, pressedPosition = 0 },\n    { type = \"ballast\", x = 60, y = 90, radius = 10, slideAngle = 0, slideRange = 30, objectPosition = 1.0 },\n    { type = \"key\", x = 50, y = 130 },\n    { type = \"key\", x = 200, y = 105 },\n    { type = \"exit\", x = 315, y = 135 },\n  }}"},{"n":13,"name":"Counterweight","lua":"{ name = \"Counterweight\", mode = \"standard\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 45, y = 50 },\n    { type = \"deflector\", x = 75, y = 50, length = 80, angle = 0 },\n    { type = \"sliding_wall\", x = 200, y = 210, length = 80, angle = 0, slideAngle = 0, slideRange = 120, objectPosition = 1.0, motion = \"plate\", plateId = 1, pressedPosition = 0 },\n    { type = \"deflector\", x = 325, y = 50, length = 80, angle = 0 },\n    { type = \"ballast\", x = 200, y = 140, radius = 10, slideAngle = 0, slideRange = 50, objectPosition = 0.0 },\n    { type = \"pressure_plate\", x = 255, y = 140, length = 28, angle = -90, link = 1, mode = \"hold\" },\n    { type = \"key\", x = 195, y = 195 },\n    { type = \"exit\", x = 360, y = 50 },\n  }}"},{"n":14,"name":"Stub 14","lua":"{ name = \"Stub 14\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":15,"name":"Stub 15","lua":"{ name = \"Stub 15\", mode = \"standard\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":16,"name":"Hazardous","lua":"{ name = \"Hazardous\", mode = \"gravityflip\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 50, y = 75 },\n    { type = \"key\", x = 200, y = 80 },\n    { type = \"exit\", x = 350, y = 70 },\n    { type = \"deflector\", x = 200, y = 70, length = 320, angle = 0 },\n    { type = \"sliding_hazard\", x = 200, y = 125, radius = 25, slideAngle = 90, slideRange = 30, objectPosition = 1.0 },\n    { type = \"text\", x = 200, y = 35, text = \"Hello Friend\", align = \"center\", angle = 180 },\n  }}"},{"n":17,"name":"Moon Landing","lua":"{ name = \"Moon Landing\", mode = \"gravityflip\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 200, y = 160 },\n    { type = \"key\", x = 30, y = 120 },\n    { type = \"key\", x = 370, y = 120 },\n    { type = \"key\", x = 200, y = 25 },\n    { type = \"exit\", x = 200, y = 220 },\n    { type = \"deflector\", x = 200, y = 220, length = 50, angle = 0 },\n    { type = \"deflector\", x = 200, y = 20, length = 100, angle = 0 },\n    { type = \"deflector\", x = 375, y = 120, length = 100, angle = 90 },\n    { type = \"deflector\", x = 25, y = 120, length = 100, angle = 90 },\n    { type = \"peg\", x = 200, y = 120, radius = 40 },\n  }}"},{"n":18,"name":"Meat Grinder","lua":"{ name = \"Meat Grinder\", mode = \"gravityflip\", borders = { top = \"open\", bottom = \"open\", left = \"open\", right = \"open\" },\n    objects = {\n    { type = \"spawn\", x = 60, y = 50 },\n    { type = \"deflector\", x = 60, y = 50, length = 40, angle = 0 },\n    { type = \"deflector\", x = 340, y = 50, length = 40, angle = 0 },\n    { type = \"deflector\", x = 60, y = 170, length = 80, angle = 0, motion = \"gravity\" },\n    { type = \"pressure_plate\", x = 90, y = 145, length = 24, angle = 0, link = 1, mode = \"hold\" },\n    { type = \"deflector\", x = 340, y = 170, length = 80, angle = 0, motion = \"gravity\" },\n    { type = \"pressure_plate\", x = 310, y = 145, length = 24, angle = 0, link = 2, mode = \"hold\" },\n    { type = \"key\", x = 60, y = 180 },\n    { type = \"key\", x = 340, y = 180 },\n    { type = \"exit\", x = 340, y = 50 },\n    { type = \"sliding_hazard\", x = 110, y = 110, radius = 25, slideAngle = 0, slideRange = 50, objectPosition = 0.0, motion = \"plate\", plateId = 1, pressedPosition = 1 },\n    { type = \"sliding_hazard\", x = 290, y = 110, radius = 25, slideAngle = 180, slideRange = 50, objectPosition = 0.0, motion = \"plate\", plateId = 1, pressedPosition = 1 },\n    { type = \"sliding_hazard\", x = 200, y = 110, radius = 25, slideAngle = 90, slideRange = 60, objectPosition = 0.0, motion = \"plate\", plateId = 2, pressedPosition = 1 },\n  }}"},{"n":19,"name":"Stub 19","lua":"{ name = \"Stub 19\", mode = \"gravityflip\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":20,"name":"Stub 20","lua":"{ name = \"Stub 20\", mode = \"gravityflip\", borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"exit\", x = 360, y = 120 },\n  }}"},{"n":21,"name":"Horizon","lua":"{ name = \"Horizon\", mode = \"scrollingworld\", world = { w = 1000, h = 240 }, borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"text\", x = 220, y = 80, text = \"The view follows.\" },\n    { type = \"spawn\", x = 60, y = 20 },\n    { type = \"key\", x = 340, y = 30 },\n    { type = \"key\", x = 600, y = 30 },\n    { type = \"key\", x = 860, y = 30 },\n    { type = \"exit\", x = 980, y = 100 },\n  }}"},{"n":22,"name":"The Climb","lua":"{ name = \"The Climb\", mode = \"scrollingworld\", world = { w = 400, h = 720 }, borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"text\", x = 200, y = 100, text = \"Climb. Keys on the walls and the ceiling.\" },\n    { type = \"spawn\", x = 40, y = 20 },\n    { type = \"key\", x = 20, y = 360 },\n    { type = \"key\", x = 380, y = 510 },\n    { type = \"key\", x = 290, y = 700 },\n    { type = \"hazard\", x = 200, y = 360, radius = 20 },\n    { type = \"exit\", x = 200, y = 700 },\n  }}"},{"n":23,"name":"Over the Top","lua":"{ name = \"Over the Top\", mode = \"scrollingworld\", world = { w = 800, h = 480 }, borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"spikes\" },\n    objects = {\n    { type = \"text\", x = 210, y = 130, text = \"Ride left. [crank] aims. [up] fires.\" },\n    { type = \"spawn\", x = 250, y = 20 },\n    { type = \"launcher\", x = 70, y = 35, angle = 45 },\n    { type = \"key\", x = 600, y = 460 },\n    { type = \"key\", x = 200, y = 460 },\n    { type = \"exit\", x = 700, y = 20 },\n  }}"},{"n":24,"name":"Corners","lua":"{ name = \"Corners\", mode = \"scrollingworld\", world = { w = 800, h = 480 }, borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"text\", x = 400, y = 90, text = \"The keys are past the edges.\" },\n    { type = \"spawn\", x = 400, y = 20 },\n    { type = \"peg\", x = 400, y = 240, radius = 30 },\n    { type = \"key\", x = 100, y = 20 },\n    { type = \"key\", x = 20, y = 380 },\n    { type = \"key\", x = 780, y = 380 },\n    { type = \"exit\", x = 400, y = 460 },\n  }}"},{"n":25,"name":"The Long Way","lua":"{ name = \"The Long Way\", mode = \"scrollingworld\", world = { w = 1200, h = 600 }, borders = { top = \"full\", bottom = \"full\", left = \"full\", right = \"full\" },\n    objects = {\n    { type = \"text\", x = 200, y = 100, text = \"Ride the walls. The middle bites.\" },\n    { type = \"spawn\", x = 60, y = 20 },\n    { type = \"key\", x = 600, y = 20 },\n    { type = \"key\", x = 1180, y = 300 },\n    { type = \"key\", x = 400, y = 580 },\n    { type = \"hazard\", x = 450, y = 220, radius = 20 },\n    { type = \"hazard\", x = 780, y = 360, radius = 20 },\n    { type = \"peg\", x = 600, y = 300, radius = 28 },\n    { type = \"exit\", x = 80, y = 580 },\n  }}"}];
 /* =====================================================================
    GAMEPLAY SIMULATION — faithful port of rails.lua + cling_ball.lua +
    the game glue in main.lua. Screen space (Y-down). Rails arrays are
@@ -1421,8 +1337,8 @@ const SIM = {
   BAR_CRANK_SENS: 0.45,
   BAR_RIDER_SCALE: 0.6,
   CRANK_CHIRALITY: 1,
-  BAR_WIDTH: 15,  // sliding_wall body
-  WALL_WIDTH: 10,  // wall / moving_wall / toggle_wall body
+  BAR_WIDTH: 15,  // sliding_wall body (crank / tilt / plate)
+  WALL_WIDTH: 10,  // wall / auto sliding_wall / toggle_wall body
   PEG_SEGMENTS: 32,
   JUNCTION_SNAP: 4,
   JUNCTION_EPSILON: 6,
@@ -1438,6 +1354,13 @@ const SIM = {
   LAUNCH_GRACE: 8,
   LAUNCHER_CRANK_SENS: 0.5,
   SLIDER_CRANK_SENS: 0.6,
+  PLUNGER_MIN_HEIGHT: 24,  // charge 0: a pop, not a no-op
+  PLUNGER_MAX_HEIGHT: 160,  // charge 1
+  PLUNGER_CRANK_PER_CHARGE: 360,  // crank degrees from slack to full; backward lets it out
+  PLUNGER_CUP_DIST: 16,  // base → cup at rest, px along the angle
+  PLUNGER_PULL_PX: 10,  // how far the cup draws back at full charge
+  PLUNGER_BOARD_SNAP: 16,  // dock radius around the cup
+  PLUNGER_REGRAB_FRAMES: 20,
   DROP_SPEED: 5,
   DROP_FACE_NY: -0.3,
   DROP_ORIGIN_EPS: 2,
@@ -1470,7 +1393,6 @@ const SIM = {
   SOLID_SWEEP_ATTACH: true,  // kill switch for playtesting
   BLADE_SCOOP_ATTACH: true,
 
-  CRAWLER_SPEEDS: {S:0.8,M:1.2,F:1.8},
   DEFAULT_CRAWLER_SPEED: 1.2,
   DEFAULT_CRAWLER_FOLLOW_SPEED: 0.8,
   CRAWLER_RADIUS_DEFAULT: 10,
@@ -1512,14 +1434,17 @@ let activeLevelMode = "standard";   // levelModeOf (top of file) normalizes
 /** LEVEL_MODES selectGroups: Left/Right pick L/R crank groups (standard, scrollingworld). */
 function modeSelectsGroups(mode){ return mode === "standard" || mode === "scrollingworld"; }
 function objectDrive(o){
-  if (!o || o.plateId != null || o.plateDriven) return null;
-  if (o.type !== "deflector" && o.type !== "sliding_wall" && o.type !== "sliding_hazard"
-      && o.type !== "ballast") return null;
-  if (o.group === "L" || o.group === "R") return o.group;
-  if (o.type === "deflector") return o.gravity === true ? "gravity" : null;
-  // Tilt ballast still slides, but it is not a crankable.
-  if (o.type === "ballast") return null;
-  return "gravity";
+  if (!o) return null;
+  if (o.type === "ballast"){
+    if (o.plateDriven) return null;
+    // Tilt ballast still slides, but it is not a crankable.
+    return (o.group === "L" || o.group === "R") ? o.group : null;
+  }
+  // static, plate and auto movers are neither crank-group nor tilt members.
+  const m = motionOf(o);
+  if (m === "crank") return (o.group === "L" || o.group === "R") ? o.group : null;
+  if (m === "gravity") return "gravity";
+  return null;
 }
 let viewDpadSteps = 0;
 let viewScale = 1;   // CSS scale that keeps the rotated frame inside #stage
@@ -1623,11 +1548,11 @@ function stepSliderGravity(obj, rollDeg){
 }
 function followsTilt(o){
   if (!o) return false;
-  if (o.plateId != null || o.plateDriven) return false;
-  if (o.group === "L" || o.group === "R") return false;
-  if (o.type === "deflector") return o.gravity === true;
-  if (o.type === "ballast") return true;
-  return o.type === "sliding_wall" || o.type === "sliding_hazard";
+  if (o.type === "ballast"){
+    if (o.plateId != null || o.plateDriven) return false;
+    return o.group !== "L" && o.group !== "R";
+  }
+  return motionOf(o) === "gravity";
 }
 
 /* ---------------- rails.lua ---------------- */
@@ -1991,16 +1916,23 @@ function makeSimObjects(level){
     const o = {type:a.type, x:sx, y:sy};
     switch(a.type){
       case "hazard": o.radius = a.radius ?? CFG.HAZARD_RADIUS_DEFAULT; break;
-      case "key": case "coin": o.type = "key"; o.collected = false; break;
+      case "key": o.collected = false; break;
       case "wall": case "deflector":
         o.length = a.length; o.angle = a.angle||0;
         if (a.type === "wall" && typeof a.width === "number") o.width = a.width;
-        // gravity true follows tilt; omit = static blade.
+        // motion gravity follows tilt, crank joins its L/R group, static is a
+        // fixed blade, auto ping-pongs minAngle..maxAngle on its own.
         if (a.type === "deflector"){
-          const grouped = a.group === "L" || a.group === "R";
-          o.gravity = a.gravity === true && !grouped;
-          if (grouped) o.group = a.group;
-          o._cfg = { angle: o.angle };
+          o.motion = motionOf(a);
+          if (o.motion === "crank" && (a.group === "L" || a.group === "R")) o.group = a.group;
+          if (o.motion === "auto"){
+            // No _cfg: an auto blade keeps its swing across restart.
+            o.minAngle = a.minAngle ?? 0; o.maxAngle = a.maxAngle ?? 90;
+            o.speed = resolveSpeed("deflector", a.speed);
+            o._sweepDir = 1;
+          } else {
+            o._cfg = { angle: o.angle };
+          }
         }
         break;
       case "peg":
@@ -2020,41 +1952,38 @@ function makeSimObjects(level){
         o._authoredDir = o.direction;
         break;
       }
-      case "sweeper":
-        o.length = a.length; o.angle = a.angle||0;
-        o.minAngle = a.minAngle ?? 0; o.maxAngle = a.maxAngle ?? 90;
-        o.speed = resolveSpeed("sweeper", a.speed);
-        o._sweepDir = 1; break;
       case "toggle_wall":
         o.length = a.length; o.baseAngle = a.angle||0;
         o.angle = mod(o.baseAngle, 360);
         o.angleStep = a.angleStep ?? 45;
         o.intervalFrames = resolveSpeed("toggle_wall", a.speed);
         o._timer = 0; o._k = 0; o.frameCount = 0; break;
-      case "sliding_wall": case "moving_wall": case "moving_hazard": case "sliding_hazard": {
-        if (a.type === "moving_hazard" || a.type === "sliding_hazard")
+      case "sliding_wall": case "sliding_hazard": {
+        if (a.type === "sliding_hazard")
           o.radius = a.radius ?? CFG.HAZARD_RADIUS_DEFAULT;
         else { o.length = a.length; o.angle = a.angle||0; }
+        o.motion = motionOf(a);
         o.slideAngle = a.slideAngle||0;
         const sp = slideSpan(a);
         o.minSlide = -sp; o.maxSlide = sp;
         o.objectPosition = Math.max(0, Math.min(1, a.objectPosition ?? 0.5));
         if (a.pressedPosition != null) o.pressedPosition = Math.max(0, Math.min(1, a.pressedPosition));
         else o.pressedPosition = 1.0;
-        if (a.plateId != null){
+        if (o.motion === "plate" && a.plateId != null){
           o.plateId = a.plateId;
           o.plateDriven = true;
           o.restPosition = o.objectPosition;
-        } else if (a.group === "L" || a.group === "R"){
+        } else if (o.motion === "crank" && (a.group === "L" || a.group === "R")){
           o.group = a.group;
         }
-        if (a.type === "sliding_wall" || a.type === "sliding_hazard"){
-          o._slideVel = 0;
-        } else {
+        if (o.motion === "auto"){
           o.speed = resolveSpeed(a.type, a.speed);
           o._moveDir = (o.objectPosition >= 1-0.001) ? -1 : 1;
+          // No _cfg: restart keeps an auto mover where it is (match Lua).
+        } else {
+          o._slideVel = 0;
+          o._cfg = { angle: o.angle||0, slideAngle: o.slideAngle, objectPosition: o.objectPosition };
         }
-        o._cfg = { angle: o.angle||0, slideAngle: o.slideAngle, objectPosition: o.objectPosition };
         break;
       }
       case "pressure_plate": {
@@ -2083,6 +2012,11 @@ function makeSimObjects(level){
         break;
       }
       case "launcher": o.angle = launcherScreenAngle(a.angle||0); break;
+      case "plunger":
+        o.angle = launcherScreenAngle(a.angle ?? 90);
+        o.power = a.power;
+        o.charge = 0;
+        break;
     }
     out.push(o);
   }
@@ -2100,6 +2034,11 @@ function wallBodyWidth(o){
     return Math.max(5, Math.min(45, Math.round(o.width / 5) * 5));
   return CFG.WALL_WIDTH;
 }
+/** An auto sliding_wall has the thinner WALL_WIDTH body (an autonomous mover,
+    drawn like a wall); every other sliding_wall is a BAR_WIDTH bar. */
+function slidingWallBodyWidth(o){
+  return isAutoMover(o) ? CFG.WALL_WIDTH : CFG.BAR_WIDTH;
+}
 function simGetRail(o){
   switch(o.type){
     case "wall":
@@ -2108,15 +2047,11 @@ function simGetRail(o){
       return makePegRailS(o.x, o.y, pegRadiusOf(o));
     case "toggle_wall":
       return makeBarOutlineRailS(o.x, o.y, o.length, o.angle, SIM.WALL_WIDTH);
-    case "deflector": case "sweeper":
+    case "deflector":
       return makeOpenRailS(o.x, o.y, o.length, o.angle);
     case "sliding_wall": {
       const [cx,cy] = simSlideCenter(o);
-      return makeBarOutlineRailS(cx, cy, o.length, o.angle, SIM.BAR_WIDTH);
-    }
-    case "moving_wall": {
-      const [cx,cy] = simSlideCenter(o);
-      return makeBarOutlineRailS(cx, cy, o.length, o.angle, SIM.WALL_WIDTH);
+      return makeBarOutlineRailS(cx, cy, o.length, o.angle, slidingWallBodyWidth(o));
     }
     case "pressure_plate": {
       const dep = (o.pressed || o.latched) ? (SIM.PLATE_TRAVEL || 3) : 0;
@@ -2221,7 +2156,20 @@ function crawlerAmbushTick(state, timer, playerOnHost, wakeFrames){
 }
 function simGetMouthPos(o){
   const a = rad(o.angle||0);
+  if (o.type === "plunger"){
+    const d = simPlungerCupDist(o) + SIM.BALL_RADIUS;
+    return [o.x + Math.cos(a)*d, o.y + Math.sin(a)*d];
+  }
   return [o.x + Math.cos(a)*SIM.MOUTH_DIST, o.y + Math.sin(a)*SIM.MOUTH_DIST];
+}
+// Port of entities.lua Plunger: cup face from the base, and the shot apex.
+function simPlungerCupDist(o){
+  return SIM.PLUNGER_CUP_DIST - SIM.PLUNGER_PULL_PX * (o.charge || 0);
+}
+function simPlungerShotHeight(o){
+  const minH = SIM.PLUNGER_MIN_HEIGHT;
+  const maxH = Math.max(minH, o.power ?? SIM.PLUNGER_MAX_HEIGHT);
+  return minH + (maxH - minH) * (o.charge || 0);
 }
 
 /* ---------------- camera (port of camera.lua) ----------------
@@ -2292,7 +2240,7 @@ function createClingSim(level){
 
   const objects = makeSimObjects(level);
   // Key count is derived from objects (never authored). Zero keys = open exit.
-  const keysTotal = objects.filter(o=>o.type==="key" || o.type==="coin").length;
+  const keysTotal = objects.filter(o=>o.type==="key").length;
 
   const game = {
     arenaBorders: borders,
@@ -2342,12 +2290,13 @@ function createClingSim(level){
     squashTimer:0, squashDuration:5, squashAmp:1, squashNx:0, squashNy:-1, squashFresh:false,
     mode:"cling", dockedLauncher:null,
     ignoreLauncher:null, ignoreLauncherFrames:0,
+    ignorePlunger:null, ignorePlungerFrames:0, plungerRise:false,
     flightX:0, flightY:0, flightVx:0, flightVy:0, flightGrace:0,
   };
   let exitReached = false;
 
   /* -------- ports of cling_ball.lua -------- */
-  /** Open BLADE centerline (deflector / sweeper), not arena or solid outlines. */
+  /** Open BLADE centerline (deflector, any motion), not arena or solid outlines. */
   function isOpenBladeRail(rail, railIndex){
     if (!rail || railIndex === 1) return false;
     if (rail.closed || rail.kind === "bar_outline" || rail.kind === "peg"
@@ -2469,6 +2418,7 @@ function createClingSim(level){
     clearJumpCoyote();
     ball.mode = "cling"; ball.dockedLauncher = null;
     ball.ignoreLauncher = null; ball.ignoreLauncherFrames = 0;
+    ball.ignorePlunger = null; ball.ignorePlungerFrames = 0; ball.plungerRise = false;
     ball.flightGrace = 0; ball.flightVx = 0; ball.flightVy = 0;
     // Spawn-side offset opposite gravity.
     const [gx, gy] = gravityVec();
@@ -2673,7 +2623,7 @@ function createClingSim(level){
     }
     return [1, 0];
   }
-  /** Open centerline rails: endpoint shove only (blades / sweepers). */
+  /** Open centerline rails: endpoint shove only (blades, auto or not). */
   function openRailLandPushSign(nRail, landS){
     const len = RL.length(nRail);
     const clear = Math.max(SIM.JUNCTION_EPSILON, 10);
@@ -3327,15 +3277,54 @@ function createClingSim(level){
     applyTransfer(best.rail, best.s, sign, push, travelDir, leftIndex);
   }
 
-  /** Auto-dock on mouth/housing proximity. Independent of tilt selection. */
+  /** Plunger lockout: frames, then clear of cup and base (cling_ball.lua). */
+  function tickPlungerIgnore(px, py){
+    const p = ball.ignorePlunger;
+    if (!p) return;
+    if (ball.ignorePlungerFrames > 0){ ball.ignorePlungerFrames--; return; }
+    const [mx,my] = simGetMouthPos(p);
+    const d = Math.min(Math.hypot(mx-px, my-py), Math.hypot(p.x-px, p.y-py));
+    if (d > SIM.PLUNGER_BOARD_SNAP) ball.ignorePlunger = null;
+  }
+  /** Nearest plunger in snap; airborne he must be moving into the cup. */
+  function findPlunger(px, py, airborne){
+    let best = null, bestD = SIM.PLUNGER_BOARD_SNAP;
+    for (const obj of objects){
+      if (obj.type !== "plunger" || obj === ball.ignorePlunger) continue;
+      const [mx,my] = simGetMouthPos(obj);
+      const d = Math.min(Math.hypot(mx-px, my-py), Math.hypot(obj.x-px, obj.y-py));
+      if (d >= bestD) continue;
+      const a = rad(obj.angle || 0);
+      const into = (ball.flightVx||0)*Math.cos(a) + (ball.flightVy||0)*Math.sin(a);
+      if (!airborne || into <= 0){ bestD = d; best = obj; }
+    }
+    return best;
+  }
+  function dockInto(obj){
+    ball.mode = "docked";
+    ball.dockedLauncher = obj;
+    ball.travelDir = 0;
+    ball.flightVx = 0; ball.flightVy = 0;
+    ball.fromJump = false; ball.jumpRising = false; ball.jumpCutArmed = false;
+    ball.plungerRise = false;
+    ball.dropOriginX = null; ball.dropOriginY = null; ball.dropFromRailIndex = null;
+    clearIgnore();
+  }
+  /** Auto-dock on mouth/housing proximity. Independent of tilt selection.
+   *  Launchers dock from a rail only; plungers also catch a fall into the cup. */
   function tryBoardLauncher(){
-    if (ball.mode === "flight" || ball.mode === "falling") return;
-    if (ball.ignoreLauncherFrames > 0){
+    if (ball.mode === "flight") return;
+    const airborne = ball.mode === "falling";
+    if (!airborne && ball.ignoreLauncherFrames > 0){
       ball.ignoreLauncherFrames--;
       if (ball.ignoreLauncherFrames <= 0) ball.ignoreLauncher = null;
     }
     if (ball.mode === "docked") return;
     const [px,py] = worldPos();
+    tickPlungerIgnore(px, py);
+    const plunger = findPlunger(px, py, airborne);
+    if (plunger){ dockInto(plunger); return; }
+    if (airborne) return;
     const snap = SIM.LAUNCHER_BOARD_SNAP;
     let best = null, bestD = snap;
     for (const obj of objects){
@@ -3347,16 +3336,32 @@ function createClingSim(level){
         if (d < bestD){ bestD = d; best = obj; }
       }
     }
-    if (best){
-      ball.mode = "docked";
-      ball.dockedLauncher = best;
-      ball.travelDir = 0;
-      clearIgnore();
-    }
+    if (best) dockInto(best);
+  }
+  /** Plunger shot as a fall (port of cling_ball.lua firePlunger). */
+  function firePlunger(p){
+    const [mx,my] = simGetMouthPos(p);
+    const a = rad(p.angle || 0);
+    const g = SIM.GRAVITY, h = simPlungerShotHeight(p);
+    const v = h > 0 ? Math.sqrt(2*g*h) + g*0.5 : g*0.5;
+    ball.flightX = mx; ball.flightY = my;
+    ball.flightVx = Math.cos(a)*v; ball.flightVy = Math.sin(a)*v;
+    ball.mode = "falling";
+    ball.dockedLauncher = null;
+    ball.ignorePlunger = p; ball.ignorePlungerFrames = SIM.PLUNGER_REGRAB_FRAMES;
+    ball.plungerRise = true;
+    ball.flightGrace = 0; ball.travelDir = 0; ball.fallStartY = my;
+    ball.fromJump = false; ball.jumpRising = false; ball.jumpCutArmed = false;
+    ball.jumpLaunchX = null; ball.jumpLaunchY = null; ball.jumpIgnoreFrames = 0;
+    ball.dropOriginX = null; ball.dropOriginY = null; ball.dropFromRailIndex = null;
+    clearJumpCoyote();
+    p.charge = 0;
+    return true;
   }
   function fire(){
     if (ball.mode !== "docked" || !ball.dockedLauncher) return false;
     const launcher = ball.dockedLauncher;
+    if (launcher.type === "plunger") return firePlunger(launcher);
     const [mx,my] = simGetMouthPos(launcher);
     const a = rad(launcher.angle || 0);
     const speed = SIM.LAUNCH_SPEED;
@@ -3415,7 +3420,8 @@ function createClingSim(level){
     game.camera.snap(...worldPos());   // main.lua snapCamera on respawn
     // Death is a full attempt reset: keys respawn (mirrors game.respawnKeys).
     for (const obj of objects){
-      if (obj.type === "key" || obj.type === "coin") obj.collected = false;
+      if (obj.type === "key") obj.collected = false;
+      if (obj.type === "plunger") obj.charge = 0;
     }
     game.keysCollected = 0;
     game.exitUnlocked = (game.keysTotal || 0) === 0;
@@ -3717,8 +3723,14 @@ function createClingSim(level){
       ball.dockedLauncher = null;
       ball.travelDir = 0;
       ball.fallStartY = my;
-      ball.ignoreLauncher = launcher;
-      ball.ignoreLauncherFrames = 20;
+      if (launcher.type === "plunger"){
+        launcher.charge = 0;
+        ball.ignorePlunger = launcher;
+        ball.ignorePlungerFrames = SIM.PLUNGER_REGRAB_FRAMES;
+      } else {
+        ball.ignoreLauncher = launcher;
+        ball.ignoreLauncherFrames = 20;
+      }
       clearIgnore();
       ball.dropOriginX = null;
       ball.dropOriginY = null;
@@ -3774,12 +3786,12 @@ function createClingSim(level){
   function carrierVelocityAt(owner, px, py){
     if (!owner || owner === "arena") return [0, 0];
     const t = owner.type;
-    if (t === "deflector" || t === "sweeper"){
+    if (t === "deflector"){
       const w = (owner._spinVel || 0) * Math.PI / 180;
       const rx = px - (owner.x || 0), ry = py - (owner.y || 0);
       return [-ry * w, rx * w];
     }
-    if (t === "moving_wall" || t === "sliding_wall")
+    if (t === "sliding_wall")
       return [owner._frameVx || 0, owner._frameVy || 0];
     return [0, 0];
   }
@@ -3994,10 +4006,12 @@ function createClingSim(level){
     ball.flightVx = (ball.flightVx || 0) + gx * g;
     ball.flightVy = (ball.flightVy || 0) + gy * g;
     let along = ball.flightVx * gx + ball.flightVy * gy;
+    // Plunger shots rise past terminal on purpose; only the rise is exempt.
+    if (ball.plungerRise && along >= 0) ball.plungerRise = false;
     if (along > term){
       const excess = along - term;
       ball.flightVx -= gx * excess; ball.flightVy -= gy * excess;
-    } else if (along < -term){
+    } else if (along < -term && !ball.plungerRise){
       const excess = along + term;
       ball.flightVx -= gx * excess; ball.flightVy -= gy * excess;
     }
@@ -4069,7 +4083,7 @@ function createClingSim(level){
     const [px,py] = worldPos();
     const r = SIM.KEY_PICKUP;
     for (const obj of objects){
-      if ((obj.type === "key" || obj.type === "coin") && !obj.collected){
+      if (obj.type === "key" && !obj.collected){
         const dx = obj.x - px, dy = obj.y - py;
         if (dx*dx + dy*dy < r*r){
           obj.collected = true;
@@ -4149,11 +4163,9 @@ function createClingSim(level){
     for (const obj of objects){
       if (obj.type === "crawler"){
         if (crawlerKillsAt(obj, px, py)){ die(); return; }
-      } else if (obj.type === "hazard" || obj.type === "moving_hazard"
-          || obj.type === "sliding_hazard"){
+      } else if (obj.type === "hazard" || obj.type === "sliding_hazard"){
         let cx = obj.x, cy = obj.y;
-        if (obj.type === "moving_hazard" || obj.type === "sliding_hazard")
-          [cx,cy] = simSlideCenter(obj);
+        if (obj.type === "sliding_hazard") [cx,cy] = simSlideCenter(obj);
         const dx = cx - px, dy = cy - py;
         const hitR = (obj.radius ?? CFG.HAZARD_RADIUS_DEFAULT) + br;
         if (dx*dx + dy*dy < hitR*hitR){ die(); return; }
@@ -4197,19 +4209,19 @@ function createClingSim(level){
       obj._frameVx = 0; obj._frameVy = 0; obj._framePrevAngle = null;
     }
     for (const obj of objects){
-      if (obj.type === "sweeper"){
+      if (obj.type === "deflector" && obj.motion === "auto"){
         obj._framePrevAngle = obj.angle;
         obj.angle += obj._sweepDir * obj.speed;
         if (obj.angle >= obj.maxAngle){ obj.angle = obj.maxAngle; obj._sweepDir = -1; }
         else if (obj.angle <= obj.minAngle){ obj.angle = obj.minAngle; obj._sweepDir = 1; }
-      } else if (obj.type === "moving_wall"){
+      } else if (obj.type === "sliding_wall" && obj.motion === "auto"){
         const [prevCx, prevCy] = simSlideCenter(obj);
         obj.objectPosition += obj._moveDir * obj.speed;
         if (obj.objectPosition >= 1){ obj.objectPosition = 1; obj._moveDir = -1; }
         else if (obj.objectPosition <= 0){ obj.objectPosition = 0; obj._moveDir = 1; }
         const [newCx, newCy] = simSlideCenter(obj);
         obj._frameVx = newCx - prevCx; obj._frameVy = newCy - prevCy;
-      } else if (obj.type === "moving_hazard"){
+      } else if (obj.type === "sliding_hazard" && obj.motion === "auto"){
         obj.objectPosition += obj._moveDir * obj.speed;
         if (obj.objectPosition >= 1){ obj.objectPosition = 1; obj._moveDir = -1; }
         else if (obj.objectPosition <= 0){ obj.objectPosition = 0; obj._moveDir = 1; }
@@ -4307,7 +4319,9 @@ function createClingSim(level){
       if (Math.hypot(bx-mx, by-my) <= pressDist) return true;
     }
     for (const obj of objects){
-      if (obj.type !== "deflector") continue;
+      // Auto blades never weighed a plate (they were a separate type this
+      // scan did not list); keep it that way (main.lua).
+      if (obj.type !== "deflector" || obj.motion === "auto") continue;
       const rail = simGetRail(obj);
       if (!rail || !rail.pts || rail.pts.length < 2) continue;
       const p1=rail.pts[0], p2=rail.pts[1];
@@ -4525,6 +4539,10 @@ function createClingSim(level){
       else if (obj.objectPosition > 1) obj.objectPosition = 1;
     } else if (obj.type === "launcher"){
       obj.angle = mod(obj.angle + change * SIM.LAUNCHER_CRANK_SENS, 360);
+    } else if (obj.type === "plunger"){
+      // Forward pulls the spring, backward lets it out.
+      const per = SIM.PLUNGER_CRANK_PER_CHARGE > 0 ? SIM.PLUNGER_CRANK_PER_CHARGE : 360;
+      obj.charge = Math.max(0, Math.min(1, (obj.charge || 0) + change / per));
     }
   }
   function selectGroup(side){
@@ -4567,15 +4585,14 @@ function createClingSim(level){
   }
   function restartLevel(){
     for (const obj of objects){
-      if (obj.type === "key" || obj.type === "coin") obj.collected = false;
+      if (obj.type === "key") obj.collected = false;
       if (obj.type === "crawler"){
         obj.dead = false;
         obj.frameCount = 0;
         obj.host = null;
       }
-      if (obj.type === "moving_wall" || obj.type === "moving_hazard"){
-        // keep authored objectPosition — match Lua (fresh load rebuilds from cfg)
-      }
+      // motion "auto" movers carry no _cfg, so the restore below skips them:
+      // keep authored objectPosition — match Lua (fresh load rebuilds from cfg)
       if (obj.type === "pressure_plate"){
         obj.pressed = false; obj.latched = false;
         obj.releaseGrace = 0; obj.flashTimer = 0;
@@ -4631,10 +4648,10 @@ function createClingSim(level){
     }
     refreshOpenRailPolarity();
     for (const obj of objects){
-      if (obj.type === "moving_wall"
+      if (obj.type === "sliding_wall" && obj.motion === "auto"
         && ((obj._frameVx || 0) !== 0 || (obj._frameVy || 0) !== 0)){
         resolveSolidSweep(obj, obj._frameVx, obj._frameVy, false);
-      } else if (obj.type === "sweeper" && obj._framePrevAngle != null
+      } else if (obj.type === "deflector" && obj.motion === "auto" && obj._framePrevAngle != null
         && obj._framePrevAngle !== obj.angle){
         resolveBladeSweep(obj, obj._framePrevAngle, obj.angle, false);
       } else if (obj.type === "toggle_wall" && obj._justSnapped){
@@ -4643,10 +4660,13 @@ function createClingSim(level){
       }
     }
 
+    if (ball.mode !== "falling") ball.plungerRise = false;
     if (isInFlight()) stepFlight();
     else if (isFalling()){
       pollJumpCut(!!ball._jumpButtonHeld);
       stepFall();
+      // A plunger cup catches a fall that lands in it.
+      if (isFalling()) tryBoardLauncher();
     }
     else if (isDocked()) tryBoardLauncher();
     else {
@@ -4670,7 +4690,10 @@ function createClingSim(level){
     }
   }
   function selectionLabel(){
-    if (isDocked()) return "CRANK: AIM · \u2191 FIRE";
+    if (isDocked()){
+      if (ball.dockedLauncher && ball.dockedLauncher.type === "plunger") return "CRANK: PULL · \u2191 FIRE";
+      return "CRANK: AIM · \u2191 FIRE";
+    }
     if (isInFlight()) return "FLIGHT";
     if (isFalling()) return "FALLING";
     if (game.selTarget === "L" || game.selTarget === "R") return "CRANK: " + game.selTarget;
@@ -4712,7 +4735,7 @@ if (typeof module !== "undefined" && module.exports){
     levelModeOf, worldError, worldSizeOf, exportWorldOf,
     gravityVec, gravityDpad, sliderRailGravity, stepSliderGravity, setViewRollDeg, followsTilt,
     makeBarOutlineRailS, makeOpenRailS, arenaRailS,
-    resolveArenaBorders, spikesFromBorders, defaultBorders, migrateLegacyBorders,
+    resolveArenaBorders, spikesFromBorders, defaultBorders,
     BUILTIN_LEVELS,
   };
 }
@@ -4771,7 +4794,7 @@ function tiltPreviewAngle(o){
 function effAngle(o,i){
   if (playing && runtime && runtime[i] && runtime[i].angle !== undefined) return runtime[i].angle;
   if (o.type === "toggle_wall") return ((o.angle||0)%360+360)%360;
-  if (o.type === "launcher") return launcherScreenAngle(o.angle||0);
+  if (AIM_TYPES.has(o.type)) return launcherScreenAngle(o.angle||0);
   const tilted = tiltPreviewAngle(o);
   if (tilted != null) return tilted;
   return o.angle||0;
@@ -4966,11 +4989,12 @@ function drawCrawlerGlyph(cx, cy, radius, dir, fc, hostRail, s, look, aimX, aimY
 /** Half-extent of the body along the slide axis (visual rail only; mirrors entities.lua).
  *  sliding_hazard endstops sit on the center's travel limits. */
 function slideVisualExtent(o){
-  if (o.type === "sliding_hazard") return 0;
-  if (o.type === "moving_hazard" || o.type === "ballast")
+  // An auto hazard's rail runs past its travel by the radius, as it always has.
+  if (o.type === "sliding_hazard" && !isAutoMover(o)) return 0;
+  if (o.type === "sliding_hazard" || o.type === "ballast")
     return o.radius || CFG.HAZARD_RADIUS_DEFAULT;
-  if (o.type === "sliding_wall" || o.type === "moving_wall"){
-    const halfW = (o.type === "sliding_wall" ? CFG.BAR_WIDTH : CFG.WALL_WIDTH) / 2;
+  if (o.type === "sliding_wall"){
+    const halfW = slidingWallBodyWidth(o) / 2;
     const d = rad((o.angle||0) - (o.slideAngle||0));
     return Math.abs(Math.cos(d))*(o.length||0)/2 + Math.abs(Math.sin(d))*halfW;
   }
@@ -4992,7 +5016,7 @@ function drawSlideRailFor(o){
   const [sx,sy] = toScreen(o.x,o.y);
   const sp = slideSpan(o);
   drawSlideRailAtS(sx,sy,o.slideAngle||0,-sp,sp,slideVisualExtent(o));
-  if (o.plateId != null){
+  if (motionOf(o) === "plate" && o.plateId != null){
     const r = rad(o.slideAngle||0);
     const pix = -sp + (o.pressedPosition ?? 1)*2*sp;
     const pex = sx + Math.cos(r)*pix, pey = sy + Math.sin(r)*pix;
@@ -5082,7 +5106,10 @@ function drawDeflectorAtS(cx,cy,length,angleDeg,selected,gravity,group){
 }
 function drawDeflector(o,i,selected){
   const [cx,cy] = toScreen(o.x,o.y);
-  drawDeflectorAtS(cx,cy,o.length,effAngle(o,i),selected,o.gravity === true,o.group);
+  const m = motionOf(o);
+  if (m === "auto"){ drawAutoBladeAtS(cx,cy,o.length,effAngle(o,i)); return; }
+  drawDeflectorAtS(cx,cy,o.length,effAngle(o,i),selected,m === "gravity",
+    m === "crank" ? o.group : null);
 }
 function drawPressurePlate(o,i){
   const rt = (playing && runtime && runtime[i]) ? runtime[i] : null;
@@ -5123,17 +5150,23 @@ function dashedCircle(cx,cy,radius){
   ctx.beginPath(); ctx.arc(cx,cy,radius,0,7); ctx.stroke();
   ctx.setLineDash([]);
 }
-function drawSweeperAtS(cx,cy,length,angleDeg){
+/** Edit-view slider badge: plate link id, or the tilt mark for gravity.
+    Crank and auto sliders carry none. */
+function drawSliderDriveBadge(o, cx, cy){
+  const m = motionOf(o);
+  if (m === "plate"){ if (o.plateId != null) drawLinkBadgeAtS(cx, cy, o.plateId); }
+  else if (m === "gravity") drawGravityBadgeAtS(cx, cy);
+  else if (m === "crank" && (o.group === "L" || o.group === "R"))
+    drawGroupArrowBadgeAtS(cx, cy, o.group);
+}
+/** motion "auto" deflector: plain 3px blade + pivot dot, no tips or badge. */
+function drawAutoBladeAtS(cx,cy,length,angleDeg){
   const [x1,y1,x2,y2] = barEndpointsScreen(cx,cy,length,angleDeg);
   ctx.strokeStyle = INK; ctx.lineWidth = 3; ctx.lineCap="butt";
   ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
   ctx.lineWidth = 1;
   ctx.fillStyle = INK;
   ctx.beginPath(); ctx.arc(cx,cy,2,0,7); ctx.fill();
-}
-function drawSweeper(o,i){
-  const [cx,cy] = toScreen(o.x,o.y);
-  drawSweeperAtS(cx,cy,o.length,effAngle(o,i));
 }
 function drawLauncherAtS(cx,cy,angleDeg,selected){
   const a = rad(angleDeg);
@@ -5155,6 +5188,42 @@ function drawLauncherAtS(cx,cy,angleDeg,selected){
   ctx.beginPath(); ctx.moveTo(bsx-px*gap,bsy-py*gap); ctx.lineTo(bex-px*gap,bey-py*gap); ctx.stroke();
   ctx.lineWidth = 1;
   ctx.beginPath(); ctx.arc(bex,bey,2,0,7); ctx.fill();
+}
+// Port of entities.lua Plunger:draw. x,y is the base plate.
+function drawPlungerAtS(bx,by,angleDeg,charge,selected){
+  const a = rad(angleDeg);
+  const ux=Math.cos(a), uy=Math.sin(a), px=-uy, py=ux;
+  const rest = CFG.PLUNGER_CUP_DIST, cup = rest - CFG.PLUNGER_PULL_PX*(charge||0);
+  const halfW = 7;
+  if (selected){
+    const d = cup + 5;
+    dashedCircle(bx+ux*d, by+uy*d, 12);
+  }
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(bx+px*halfW, by+py*halfW); ctx.lineTo(bx-px*halfW, by-py*halfW); ctx.stroke();
+  ctx.lineWidth = 1;
+  const wallEnd = rest + 2;
+  ctx.beginPath();
+  ctx.moveTo(bx+px*halfW, by+py*halfW); ctx.lineTo(bx+px*halfW+ux*wallEnd, by+py*halfW+uy*wallEnd);
+  ctx.moveTo(bx-px*halfW, by-py*halfW); ctx.lineTo(bx-px*halfW+ux*wallEnd, by-py*halfW+uy*wallEnd);
+  ctx.stroke();
+  const coils = 5, amp = 4, span = cup - 3;
+  ctx.beginPath(); ctx.moveTo(bx+ux*2, by+uy*2);
+  for (let i=1;i<=coils*2;i++){
+    const t = i/(coils*2);
+    const side = (i === coils*2) ? 0 : ((i%2===0) ? -amp : amp);
+    ctx.lineTo(bx+ux*(2+span*t)+px*side, by+uy*(2+span*t)+py*side);
+  }
+  ctx.stroke();
+  const cx = bx+ux*cup, cy = by+uy*cup;
+  ctx.lineWidth = 3;
+  ctx.beginPath(); ctx.moveTo(cx+px*(halfW-2), cy+py*(halfW-2)); ctx.lineTo(cx-px*(halfW-2), cy-py*(halfW-2)); ctx.stroke();
+  ctx.lineWidth = 1;
+}
+function drawPlunger(o,i,selected){
+  const [bx,by] = toScreen(o.x,o.y);
+  drawPlungerAtS(bx,by,effAngle(o,i),0,selected);
 }
 function drawLauncher(o,i,selected){
   const [cx,cy] = toScreen(o.x,o.y);
@@ -5210,10 +5279,126 @@ function drawExit(o){
   // Editor canvas: show open look (authoring). Test mode passes unlocked explicitly.
   drawExitAtS(cx,cy,true);
 }
+// World-text / UI prompt tokens: [up] or {up}, same set as ui_widgets.lua.
+const PROMPT_TOKEN_RE = /[\[{](up|down|left|right|crank|dpad|heart|heart_empty|tick)[\]}]/g;
+const PROMPT_GLYPH_W = 14;
+function promptParts(str){
+  const parts = [];
+  if (!str) return parts;
+  let i = 0;
+  PROMPT_TOKEN_RE.lastIndex = 0;
+  let m;
+  while ((m = PROMPT_TOKEN_RE.exec(str)) !== null){
+    if (m.index > i) parts.push({ t: str.slice(i, m.index) });
+    parts.push({ gl: m[1] });
+    i = m.index + m[0].length;
+  }
+  if (i < str.length) parts.push({ t: str.slice(i) });
+  return parts;
+}
+function promptWidth(str){
+  let w = 0;
+  for (const p of promptParts(str)){
+    if (p.gl) w += PROMPT_GLYPH_W;
+    else w += ctx.measureText(p.t).width;
+  }
+  return w;
+}
+function drawPromptGlyphAt(gl, cx, cy){
+  ctx.fillStyle = INK;
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 1;
+  if (gl === "up"){
+    ctx.beginPath();
+    ctx.moveTo(cx, cy - 3);
+    ctx.lineTo(cx - 4, cy + 3);
+    ctx.lineTo(cx + 4, cy + 3);
+    ctx.closePath();
+    ctx.fill();
+  } else if (gl === "down"){
+    ctx.beginPath();
+    ctx.moveTo(cx, cy + 3);
+    ctx.lineTo(cx - 4, cy - 3);
+    ctx.lineTo(cx + 4, cy - 3);
+    ctx.closePath();
+    ctx.fill();
+  } else if (gl === "left"){
+    ctx.beginPath();
+    ctx.moveTo(cx - 3, cy);
+    ctx.lineTo(cx + 3, cy - 4);
+    ctx.lineTo(cx + 3, cy + 4);
+    ctx.closePath();
+    ctx.fill();
+  } else if (gl === "right"){
+    ctx.beginPath();
+    ctx.moveTo(cx + 3, cy);
+    ctx.lineTo(cx - 3, cy - 4);
+    ctx.lineTo(cx - 3, cy + 4);
+    ctx.closePath();
+    ctx.fill();
+  } else if (gl === "crank"){
+    ctx.beginPath();
+    ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    ctx.lineTo(cx + 3, cy - 4);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx + 3, cy - 4, 1, 0, Math.PI * 2);
+    ctx.fill();
+  } else if (gl === "dpad"){
+    ctx.fillRect(cx - 1, cy - 5, 2, 10);
+    ctx.fillRect(cx - 5, cy - 1, 10, 2);
+  } else if (gl === "heart" || gl === "heart_empty"){
+    const s = 4;
+    ctx.beginPath();
+    ctx.arc(cx - s * 0.45, cy - s * 0.15, s * 0.55, 0, Math.PI * 2);
+    ctx.arc(cx + s * 0.45, cy - s * 0.15, s * 0.55, 0, Math.PI * 2);
+    if (gl === "heart"){
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(cx - s, cy);
+      ctx.lineTo(cx + s, cy);
+      ctx.lineTo(cx, cy + s * 1.15);
+      ctx.closePath();
+      ctx.fill();
+    } else {
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(cx - s * 0.85, cy + s * 0.15);
+      ctx.lineTo(cx, cy + s * 1.1);
+      ctx.lineTo(cx + s * 0.85, cy + s * 0.15);
+      ctx.stroke();
+    }
+  } else if (gl === "tick"){
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(cx - 4, cy);
+    ctx.lineTo(cx - 1, cy + 3);
+    ctx.lineTo(cx + 4, cy - 3);
+    ctx.stroke();
+    ctx.lineWidth = 1;
+  }
+}
+function drawPromptLineAt(str, x, y){
+  let cursor = x;
+  const midY = y + 6;
+  for (const p of promptParts(str)){
+    if (p.gl){
+      drawPromptGlyphAt(p.gl, cursor + PROMPT_GLYPH_W / 2, midY);
+      cursor += PROMPT_GLYPH_W;
+    } else {
+      ctx.fillStyle = INK;
+      ctx.fillText(p.t, cursor, y);
+      cursor += ctx.measureText(p.t).width;
+    }
+  }
+}
 function drawTextPanelAtS(cx, cy, o, selected){
   const label = (o && o.text) || "";
   ctx.font = "12px monospace";
-  const tw = Math.max(8, ctx.measureText(label).width);
+  const tw = Math.max(8, promptWidth(label));
   const pad = 5;
   const w = tw + pad * 2;
   const h = 12 + pad * 2;
@@ -5258,7 +5443,7 @@ function drawTextPanelAtS(cx, cy, o, selected){
   ctx.stroke();
   ctx.fillStyle = INK;
   ctx.textBaseline = "top";
-  ctx.fillText(label, -w / 2 + pad, -h / 2 + pad);
+  drawPromptLineAt(label, -w / 2 + pad, -h / 2 + pad);
   ctx.restore();
 }
 function drawTextPanel(o, selected){
@@ -5312,7 +5497,7 @@ function drawObject(o,i){
   switch(o.type){
     case "spawn": drawSpawn(o); break;
     case "exit": drawExit(o); break;
-    case "key": case "coin": drawKey(o); break;
+    case "key": drawKey(o); break;
     case "hazard": { const [cx,cy]=toScreen(o.x,o.y); drawHazardBody(cx,cy,o.radius,frame); break; }
     case "wall": {
       const [cx,cy]=toScreen(o.x,o.y);
@@ -5335,34 +5520,21 @@ function drawObject(o,i){
         rt ? (rt.frameCount || 0) : 0);
       break;
     }
-    case "sweeper": drawSweeper(o,i); break;
     case "deflector": drawDeflector(o,i,selected); break;
     case "sliding_wall": {
       drawSlideRailFor(o);
       const [cx,cy]=slideBodyScreen(o,effPos(o,i));
+      // Auto walls draw plain (no selection outline, no drive badge).
+      if (isAutoMover(o)){ drawWallBody(cx,cy,o.length,effAngle(o,i)); break; }
       drawWallBody(cx,cy,o.length,effAngle(o,i), selected?7:undefined, CFG.BAR_WIDTH);
-      if (o.plateId != null) drawLinkBadgeAtS(cx, cy, o.plateId);
-      else if (o.group !== "L" && o.group !== "R") drawGravityBadgeAtS(cx, cy);
-      break;
-    }
-    case "moving_wall": {
-      drawSlideRailFor(o);
-      const [cx,cy]=slideBodyScreen(o,effPos(o,i));
-      drawWallBody(cx,cy,o.length,effAngle(o,i));
-      break;
-    }
-    case "moving_hazard": {
-      drawSlideRailFor(o);
-      const [cx,cy]=slideBodyScreen(o,effPos(o,i));
-      drawHazardBody(cx,cy,o.radius,frame);
+      drawSliderDriveBadge(o, cx, cy);
       break;
     }
     case "sliding_hazard": {
       drawSlideRailFor(o);
       const [cx,cy]=slideBodyScreen(o,effPos(o,i));
       drawHazardBody(cx,cy,o.radius,frame);
-      if (o.plateId != null) drawLinkBadgeAtS(cx, cy, o.plateId);
-      else if (o.group !== "L" && o.group !== "R") drawGravityBadgeAtS(cx, cy);
+      drawSliderDriveBadge(o, cx, cy);
       break;
     }
     case "ballast": {
@@ -5406,6 +5578,7 @@ function drawObject(o,i){
       break;
     }
     case "launcher": drawLauncher(o,i,selected); break;
+    case "plunger": drawPlunger(o,i,selected); break;
     case "text": drawText(o,selected); break;
   }
 }
@@ -5429,10 +5602,10 @@ function drawTimeHudGuide(viewX, viewY){
   ctx.restore();
 }
 function objectReach(o){
-  if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard") return (o.radius||14)+5;
+  if (o.type==="hazard"||o.type==="sliding_hazard") return (o.radius||14)+5;
   if (o.type==="crawler") return (o.radius||CFG.CRAWLER_RADIUS_DEFAULT||9)+5;
   if (o.type==="ballast") return (o.radius||CFG.BALLAST_RADIUS||10);
-  if (o.type==="deflector") return o.length/2 + 8;
+  if (o.type==="deflector" && !isAutoMover(o)) return o.length/2 + 8;
   if (o.type==="wall") return o.length/2 + wallBodyWidth(o)/2;
   if (o.type==="peg") return pegRadiusOf(o);
   if (BAR_TYPES.has(o.type)) return o.length/2;
@@ -5448,15 +5621,15 @@ function editorCrawlerHostRail(o){
     if (h.type === "peg"){
       const [cx,cy] = toScreen(h.x, h.y);
       rail = makePegRailS(cx, cy, pegRadiusOf(h));
-    } else if (h.type === "deflector" || h.type === "sweeper"){
+    } else if (h.type === "deflector"){
       const [cx,cy] = toScreen(h.x, h.y);
       rail = makeOpenRailS(cx, cy, h.length, effAngle(h, hi));
     } else {
       let cx, cy, len, ang, bw;
-      if (h.type === "sliding_wall" || h.type === "moving_wall"){
+      if (h.type === "sliding_wall"){
         [cx,cy] = slideBodyScreen(h, effPos(h, hi));
         len = h.length; ang = effAngle(h, hi);
-        bw = h.type === "sliding_wall" ? CFG.BAR_WIDTH : CFG.WALL_WIDTH;
+        bw = slidingWallBodyWidth(h);
       } else {
         [cx,cy] = toScreen(h.x, h.y);
         len = h.length; ang = effAngle(h, hi);
@@ -5483,7 +5656,7 @@ function drawOverlays(){
       if (o.type === "hazard"){
         const [cx,cy]=toScreen(o.x,o.y);
         killCircles(cx,cy,o.radius);
-      } else if (o.type === "moving_hazard" || o.type === "sliding_hazard"){
+      } else if (o.type === "sliding_hazard"){
         for (const pos of [0,1]){
           const [cx,cy]=slideBodyScreen(o,pos);
           killCircles(cx,cy,o.radius);
@@ -5506,7 +5679,7 @@ function drawOverlays(){
   }
   if (showReach){
     for (const o of level.objects){
-      if (o.type !== "deflector") continue;
+      if (o.type !== "deflector" || isAutoMover(o)) continue;
       const [cx,cy]=toScreen(o.x,o.y);
       ctx.strokeStyle = "rgba(30,80,200,.55)";
       ctx.setLineDash([4,3]);
@@ -5582,7 +5755,7 @@ function drawSelection(){
   // marching ants bounds
   let hw=12, hh=12;
   if (BAR_TYPES.has(o.type)){ hw = o.length/2+6; hh = hw; }
-  if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard"){ hw=hh=(o.radius||CFG.HAZARD_RADIUS_DEFAULT)+6; }
+  if (o.type==="hazard"||o.type==="sliding_hazard"){ hw=hh=(o.radius||CFG.HAZARD_RADIUS_DEFAULT)+6; }
   if (o.type==="ballast"){ hw=hh=(o.radius||CFG.BALLAST_RADIUS||10)+6; }
   if (o.type==="crawler"){ hw=hh=(o.radius||CFG.CRAWLER_RADIUS_DEFAULT)+6; }
   ctx.strokeStyle = "rgba(216,129,0,.95)";
@@ -5616,7 +5789,7 @@ function rotHandlePos(o,i){
   if (!ANGLED.has(o.type)) return null;
   const [cx,cy] = bodyCenterScreen(o,i);
   const a = rad(effAngle(o,i));
-  const d = (o.type==="launcher") ? 32 : o.length/2 + 14;
+  const d = (o.type==="launcher") ? 32 : (o.type==="plunger") ? 30 : o.length/2 + 14;
   return [cx+Math.cos(a)*d, cy+Math.sin(a)*d];
 }
 function slideHandlePos(o){
@@ -5713,13 +5886,13 @@ function loop(t){
 /* ---------- play mode (step() ports) ---------- */
 function startPlay(){
   runtime = level.objects.map(o=>{
-    if (o.type==="sweeper")
-      return {angle:o.angle||0, dir:1, speed:resolveSpeed("sweeper", o.speed)};
+    if (o.type==="deflector" && isAutoMover(o))
+      return {angle:o.angle||0, dir:1, speed:resolveSpeed("deflector", o.speed)};
     if (o.type==="toggle_wall")
       return {angle:(((o.angle||0)%360)+360)%360, base:o.angle||0, k:0, timer:0,
               interval:resolveSpeed("toggle_wall", o.speed), step:o.angleStep??45,
               frameCount:0};
-    if (o.type==="moving_wall"||o.type==="moving_hazard")
+    if ((o.type==="sliding_wall"||o.type==="sliding_hazard") && isAutoMover(o))
       return {pos:o.objectPosition, dir:(o.objectPosition >= 1-0.001)?-1:1,
               speed:resolveSpeed(o.type, o.speed)};
     if (o.type==="crawler"){
@@ -5756,7 +5929,7 @@ function stopPlay(){
 function stepMovers(){
   for (let i=0;i<level.objects.length;i++){
     const o = level.objects[i], rt = runtime[i];
-    if (o.type==="sweeper"){
+    if (o.type==="deflector" && rt.dir !== undefined){
       rt.angle += rt.dir*rt.speed;
       const mn = o.minAngle??0, mx = o.maxAngle??90;
       if (rt.angle >= mx){ rt.angle = mx; rt.dir = -1; }
@@ -5768,7 +5941,7 @@ function stepMovers(){
         rt.timer = 0; rt.k++;
         rt.angle = (((rt.base + rt.k*rt.step)%360)+360)%360;
       }
-    } else if (o.type==="moving_wall"||o.type==="moving_hazard"){
+    } else if ((o.type==="sliding_wall"||o.type==="sliding_hazard") && rt.pos !== undefined){
       rt.pos += rt.dir*rt.speed;
       if (rt.pos >= 1){ rt.pos = 1; rt.dir = -1; }
       else if (rt.pos <= 0){ rt.pos = 0; rt.dir = 1; }
@@ -5827,7 +6000,7 @@ function startTest(){
       ? "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>tilt</b> gravity &nbsp;<b>&#8593;</b> CLING/FIRE &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit"
       : "TEST — <b>wheel / &#8592;&#8594;</b> crank &nbsp;<b>&#8593;</b> jump &nbsp;<b>&#8595;</b> drop &nbsp;<b>R</b> restart &nbsp;<b>Esc</b> exit";
   el("stMode").innerHTML = testHelp
-    + (unbound ? " &nbsp;· crawler has no host (wall / moving wall / toggle wall / sliding wall / peg / deflector) — it stays put" : "");
+    + (unbound ? " &nbsp;· crawler has no host (wall / toggle wall / sliding wall / peg / deflector) — it stays put" : "");
   cv.style.cursor = "default";
   cv.focus && cv.focus();
 }
@@ -5966,13 +6139,13 @@ function drawSim(sim){
 
   const docked = sim.isDocked() ? ball.dockedLauncher : null;
   for (const obj of sim.objects){
-    // Launchers highlight only while docked.
-    const isSelected = (obj.type === "launcher" && docked === obj)
+    // Launchers and plungers highlight only while docked.
+    const isSelected = (AIM_TYPES.has(obj.type) && docked === obj)
       || ((g.selTarget === "L" || g.selTarget === "R") && obj.group === g.selTarget);
     switch(obj.type){
       case "spawn": drawSpawnAtS(obj.x, obj.y); break;
       case "exit": drawExitAtS(obj.x, obj.y, g.exitUnlocked || (g.keysTotal||0)===0); break;
-      case "key": case "coin": if (!obj.collected) drawKeyAtS(obj.x, obj.y); break;
+      case "key": if (!obj.collected) drawKeyAtS(obj.x, obj.y); break;
       case "hazard": drawHazardBody(obj.x, obj.y, obj.radius, frame); break;
       case "wall":
         drawWallBody(obj.x, obj.y, obj.length, obj.angle, undefined, wallBodyWidth(obj)); break;
@@ -6005,38 +6178,40 @@ function drawSim(sim){
         drawCrawlerGlyph(px, py, obj.radius, obj.direction || 1, obj.frameCount || frame, hostRail, s, look, ax, ay);
         break;
       }
-      case "sweeper": drawSweeperAtS(obj.x, obj.y, obj.length, obj.angle); break;
-      case "deflector": drawDeflectorAtS(obj.x, obj.y, obj.length, obj.angle, isSelected, obj.gravity === true, obj.group); break;
+      case "deflector":
+        if (obj.motion === "auto") drawAutoBladeAtS(obj.x, obj.y, obj.length, obj.angle);
+        else drawDeflectorAtS(obj.x, obj.y, obj.length, obj.angle, isSelected, obj.motion === "gravity", obj.group);
+        break;
       case "sliding_wall": {
+        if (obj.motion === "auto"){
+          drawSlideRailAtS(obj.x, obj.y, obj.slideAngle, obj.minSlide, obj.maxSlide, slideVisualExtent(obj));
+          const [cx,cy] = slideCenterOfSim(obj);
+          drawWallBody(cx, cy, obj.length, obj.angle);
+          break;
+        }
         drawSlideRailSim(obj);
         const [cx,cy] = slideCenterOfSim(obj);
         drawWallBody(cx, cy, obj.length, obj.angle, isSelected ? 7 : undefined, CFG.BAR_WIDTH);
         const plate = sim.objects.find(p => p.type === "pressure_plate" && p.link === obj.plateId);
         drawTriggerReturnClock(obj, cx, cy, plate);
         if (obj.plateDriven && obj.plateId != null) drawLinkBadgeAtS(cx, cy, obj.plateId);
-        else if (!obj.plateDriven && obj.group !== "L" && obj.group !== "R") drawGravityBadgeAtS(cx, cy);
-        break;
-      }
-      case "moving_wall": {
-        drawSlideRailAtS(obj.x, obj.y, obj.slideAngle, obj.minSlide, obj.maxSlide, slideVisualExtent(obj));
-        const [cx,cy] = slideCenterOfSim(obj);
-        drawWallBody(cx, cy, obj.length, obj.angle);
-        break;
-      }
-      case "moving_hazard": {
-        drawSlideRailAtS(obj.x, obj.y, obj.slideAngle, obj.minSlide, obj.maxSlide, slideVisualExtent(obj));
-        const [cx,cy] = slideCenterOfSim(obj);
-        drawHazardBody(cx, cy, obj.radius, frame);
+        else if (obj.motion === "gravity") drawGravityBadgeAtS(cx, cy);
         break;
       }
       case "sliding_hazard": {
+        if (obj.motion === "auto"){
+          drawSlideRailAtS(obj.x, obj.y, obj.slideAngle, obj.minSlide, obj.maxSlide, slideVisualExtent(obj));
+          const [cx,cy] = slideCenterOfSim(obj);
+          drawHazardBody(cx, cy, obj.radius, frame);
+          break;
+        }
         drawSlideRailSim(obj);
         const [cx,cy] = slideCenterOfSim(obj);
         drawHazardBody(cx, cy, obj.radius, frame);
         const plate = sim.objects.find(p => p.type === "pressure_plate" && p.link === obj.plateId);
         drawTriggerReturnClock(obj, cx, cy, plate);
         if (obj.plateDriven && obj.plateId != null) drawLinkBadgeAtS(cx, cy, obj.plateId);
-        else if (!obj.plateDriven && obj.group !== "L" && obj.group !== "R") drawGravityBadgeAtS(cx, cy);
+        else if (obj.motion === "gravity") drawGravityBadgeAtS(cx, cy);
         break;
       }
       case "ballast": {
@@ -6047,6 +6222,7 @@ function drawSim(sim){
       }
       case "pressure_plate": drawPressurePlateAtS(obj); break;
       case "launcher": drawLauncherAtS(obj.x, obj.y, obj.angle, isSelected); break;
+      case "plunger": drawPlungerAtS(obj.x, obj.y, obj.angle, obj.charge, isSelected); break;
       case "text": drawTextPanelAtS(obj.x, obj.y, obj, isSelected); break;
     }
   }
@@ -6166,12 +6342,17 @@ function hitTest(sx,sy){
     const k = viewUiK;   // 1 unless a big world is scaled down
     if (o.type==="spawn") hit = Math.hypot(sx-cx,sy-cy) <= 10*k;
     else if (o.type==="exit") hit = Math.abs(sx-cx)<=15*k && Math.abs(sy-cy)<=15*k;
-    else if (o.type==="key" || o.type==="coin") hit = Math.hypot(sx-cx,sy-cy) <= 8*k;
-    else if (o.type==="hazard"||o.type==="moving_hazard"||o.type==="sliding_hazard"||o.type==="crawler"||o.type==="ballast")
+    else if (o.type==="key") hit = Math.hypot(sx-cx,sy-cy) <= 8*k;
+    else if (o.type==="hazard"||o.type==="sliding_hazard"||o.type==="crawler"||o.type==="ballast")
       hit = Math.hypot(sx-cx,sy-cy) <= Math.max(8, o.radius||(o.type==="crawler"?CFG.CRAWLER_RADIUS_DEFAULT:(o.type==="ballast"?(CFG.BALLAST_RADIUS||10):CFG.HAZARD_RADIUS_DEFAULT)));
     else if (o.type==="peg")
       hit = Math.hypot(sx-cx,sy-cy) <= pegRadiusOf(o) + 2;
     else if (o.type==="launcher") hit = Math.hypot(sx-cx,sy-cy) <= 16;
+    else if (o.type==="plunger"){
+      // Base plate to cup, along the aim.
+      const a = rad(effAngle(o,i)), m = CFG.PLUNGER_CUP_DIST/2;
+      hit = Math.hypot(sx-(cx+Math.cos(a)*m), sy-(cy+Math.sin(a)*m)) <= 14;
+    }
     else if (o.type==="text") hit = Math.hypot(sx-cx,sy-cy) <= 28;
     else if (BAR_TYPES.has(o.type)){
       const [x1,y1,x2,y2] = barEndpointsScreen(cx,cy,o.length,effAngle(o,i));
@@ -6208,39 +6389,16 @@ function redo(){ if(!redoStack.length) return; stopPlay(); undoStack.push(snapsh
 function saveLocal(){
   try{ localStorage.setItem("cling-editor-autosave", JSON.stringify(level)); }catch(e){}
 }
-function migrateLetterFields(lvl){
-  let changed = false;
-  for (const o of lvl.objects || []){
-    // Accept legacy type="coin"; always store as key.
-    if (o.type === "coin"){ o.type = "key"; changed = true; }
-    if (SLIDE_TYPES.has(o.type) && typeof o.slideRange === "string"){
-      const n = CFG.LEGACY_SLIDER_SPANS[o.slideRange];
-      if (n != null){ o.slideRange = n; changed = true; }
-    }
-    if (("speed" in o) && typeof o.speed === "string"
-        && (o.type==="sweeper"||o.type==="toggle_wall"||o.type==="moving_wall"||o.type==="moving_hazard")){
-      const n = speedTableForType(o.type)[o.speed];
-      if (n != null){ o.speed = n; changed = true; }
-    }
-    // crawler keeps letter speed ("S"|"M"|"F") for Lua round-trip — do not numericize.
-  }
-  return changed;
-}
 function loadLocal(){
   try{
     const s = localStorage.getItem("cling-editor-autosave");
     if (s){
       const l = JSON.parse(s);
       if (l && Array.isArray(l.objects)){
-        migrateLegacyBorders(l);
-        const migrated = migrateLetterFields(l);
-        if ("theme" in l) delete l.theme;
-        // Autosaves from before standard became the default left gravityflip
-        // implicit (no mode key). Every save since stores the mode by name.
-        if (!("mode" in l)) l.mode = "gravityflip";
+        for (const o of l.objects) foldLegacyGravity(o);
+        resolveArenaBorders(l);
         l.mode = levelModeOf(l);
         level = l;
-        if (migrated) saveLocal();
         return true;
       }
     }
@@ -6273,7 +6431,7 @@ function validate(){
     if (!onPerim || !inside) warns.push(`Exit at (${fmtNum(o.x)}, ${fmtNum(o.y)}) is not on the arena perimeter (x=${fmtNum(axL)}|${fmtNum(axR)} or y=${fmtNum(ayB)}|${fmtNum(ayT)}).`);
   });
   // KEY-GATED EXIT: count derived from key objects; cap at CLING_KEYS_MAX.
-  const keyCount = objs.filter(o=>o.type==="key" || o.type==="coin").length;
+  const keyCount = objs.filter(o=>o.type==="key").length;
   // No fallback: a missing constant means the generated block is stale, and a
   // silent default would pass levels the game rejects. Fail loudly instead.
   const keysMax = SIM.KEYS_MAX;
@@ -6304,10 +6462,37 @@ function validate(){
     warns.push("Bottom border is open — no arena floor snap.");
   }
 
+  // motion pairing (main.lua load asserts): group only with crank and crank
+  // needs L/R; plateId / pressedPosition only with plate and plate needs plateId.
   objs.forEach((o,i)=>{
-    if (!CRANKABLE.has(o.type) || o.plateId != null) return;
-    if (o.type === "deflector" && o.gravity !== true)
-      infos.push(`#${i+1} deflector has no gravity — static blade (not crankable).`);
+    // No back-compat: an old autosave can still hold removed types.
+    if (!EXPORT_SPEC[o.type]){
+      errs.push(`#${i+1} unknown object type '${o.type}' — delete or replace it.`);
+      return;
+    }
+    const motions = MOTION_ORDER[o.type];
+    if (!motions){
+      if (o.motion !== undefined) errs.push(`#${i+1} ${o.type} cannot take motion (deflector / sliding_wall / sliding_hazard only).`);
+      return;
+    }
+    const m = motionOf(o);
+    if (!motions.includes(m)){
+      errs.push(`#${i+1} ${o.type} has invalid motion '${m}' (expected ${motions.join(", ")}).`);
+      return;
+    }
+    const grouped = o.group === "L" || o.group === "R";
+    if (m === "crank" && !grouped)
+      errs.push(`#${i+1} ${o.type} motion crank needs group L or R.`);
+    if (m !== "crank" && o.group != null)
+      errs.push(`#${i+1} ${o.type} sets group but motion is ${m} (group needs motion crank).`);
+    if (m === "plate" && o.plateId == null)
+      errs.push(`#${i+1} ${o.type} motion plate needs a plateId.`);
+    if (m !== "plate" && o.plateId != null)
+      errs.push(`#${i+1} ${o.type} sets plateId but motion is ${m} (plateId needs motion plate).`);
+    if (m !== "plate" && o.pressedPosition != null)
+      errs.push(`#${i+1} ${o.type} sets pressedPosition but motion is ${m} (needs motion plate).`);
+    if (o.type === "deflector" && m === "static")
+      infos.push(`#${i+1} deflector is static — fixed blade (not crankable).`);
   });
 
   const plateLinks = {}, plateTargets = {};
@@ -6320,9 +6505,8 @@ function validate(){
     if (o.plateId != null){
       if (o.type !== "sliding_wall" && o.type !== "sliding_hazard")
         warns.push(`#${i+1} plateId on invalid type ${o.type}.`);
-      if (o.gravity)
-        warns.push(`#${i+1} plate-driven ${o.type} must not set gravity.`);
-      plateTargets[o.plateId] = (plateTargets[o.plateId]||0)+1;
+      else if (motionOf(o) === "plate")
+        plateTargets[o.plateId] = (plateTargets[o.plateId]||0)+1;
     }
   });
   for (const link of Object.keys(plateLinks)){
@@ -6380,7 +6564,7 @@ function validate(){
   // Flush long-face seals (intentional; blocks perimeter slip-through in play).
   const aL = inset, aT = inset, aR = WORLD_W - inset, aB = WORLD_H - inset;
   objs.forEach((o,i)=>{
-    if (!["wall","toggle_wall","moving_wall","sliding_wall"].includes(o.type)) return;
+    if (!["wall","toggle_wall","sliding_wall"].includes(o.type)) return;
     let cx, cy;
     if (SLIDE_TYPES.has(o.type)){
       const [sx,sy] = toScreen(o.x, o.y);
@@ -6392,9 +6576,9 @@ function validate(){
     } else {
       [cx,cy] = toScreen(o.x, o.y);
     }
-    const w = (o.type === "sliding_wall") ? CFG.BAR_WIDTH
+    const w = (o.type === "sliding_wall") ? slidingWallBodyWidth(o)
       : (o.type === "wall") ? wallBodyWidth(o) : CFG.WALL_WIDTH;
-    const len = o.length ?? CFG.WALL_SIZES[o.size || "M"] ?? CFG.WALL_SIZES.M;
+    const len = o.length ?? CFG.DEFAULT_WALL_LENGTH;
     const rail = makeBarOutlineRailS(cx, cy, len, o.angle || 0, w);
     const arena = arenaRailS(resolveArenaBorders(level), WORLD_W, WORLD_H);
     const seals = RL.arenaEdgeSeals(
@@ -6470,7 +6654,7 @@ function renderProps(){
   box.appendChild(propNum("y (center, +up)", "y", o, {step:5}));
 
   const t = o.type;
-  if (t==="hazard" || t==="moving_hazard" || t==="sliding_hazard" || t==="crawler" || t==="ballast")
+  if (t==="hazard" || t==="sliding_hazard" || t==="crawler" || t==="ballast")
     box.appendChild(propNum("radius", "radius", o, {min:2}));
   if (t === "ballast"){
     const hint = document.createElement("div"); hint.className = "hint";
@@ -6480,12 +6664,10 @@ function renderProps(){
   if (t==="crawler"){
     box.appendChild(propSeg("mode", "mode", o, ["patrol","follow","ambush"], (M)=>{
       o.mode = M;
-      if (M === "follow" && (o.speed == null || o.speed === "M")) o.speed = "S";
-      if (M !== "follow" && o.speed === "S") o.speed = "M";
     }));
     const modeHint = document.createElement("div"); modeHint.className = "hint";
     modeHint.textContent = o.mode === "follow"
-      ? "tracks the player along the host outline; default speed S"
+      ? "tracks the player along the host outline; default speed " + CFG.DEFAULT_CRAWLER_FOLLOW_SPEED
       : o.mode === "ambush"
       ? "sleeps until Cling lands on this host, then patrols"
       : "constant lap in the authored direction";
@@ -6518,31 +6700,46 @@ function renderProps(){
       box.appendChild(hint);
     }
     {
-      const tbl = SIM.CRAWLER_SPEEDS;
+      const tbl = PRESETS.crawlerSpeed;
+      const mode = crawlerModeOf(o.mode);
+      // Same ceiling the game clamps to: a step of half the kill radius or more tunnels.
+      const maxSpeed = CFG.CRAWLER_RADIUS_DEFAULT * 0.5 - 0.01;
       const row3 = document.createElement("div"); row3.className="prop-row";
       const lab3 = document.createElement("label"); lab3.textContent="speed";
-      row3.append(lab3, segControl(["S","M","F"],
-        (typeof o.speed==="string" && tbl[o.speed]!=null) ? o.speed
-          : letterOfValue(resolveSpeed("crawler", o.speed), tbl) || "M",
-        (L)=>{ stopPlay(); pushUndo(); o.speed = L; commit(); renderProps(); },
+      const inp3 = document.createElement("input"); inp3.type="number"; inp3.step=0.1;
+      inp3.min = 0; inp3.max = fmtNum(maxSpeed);
+      inp3.value = o.speed != null ? fmtNum(o.speed) : "";
+      inp3.placeholder = fmtNum(resolveCrawlerSpeed(undefined, mode));
+      inp3.addEventListener("change", ()=>{
+        stopPlay(); pushUndo();
+        const v = parseFloat(inp3.value);
+        // Empty means "mode default", so a follow crawler keeps its slower default.
+        if (!isFinite(v)) delete o.speed;
+        else o.speed = Math.max(0, Math.min(maxSpeed, v));
+        commit(); renderProps();
+      });
+      row3.append(lab3, inp3, segControl(["S","M","F"],
+        letterOfValue(resolveCrawlerSpeed(o.speed, mode), tbl),
+        (L)=>{ stopPlay(); pushUndo(); o.speed = tbl[L]; commit(); renderProps(); },
         L=>`${L}·${tbl[L]}`));
       box.appendChild(row3);
       const hint = document.createElement("div"); hint.className="hint";
-      hint.textContent = "px/frame along host outline";
+      hint.textContent = "px/frame along host outline · empty = mode default";
       box.appendChild(hint);
     }
   }
   if (BAR_TYPES.has(t)){
-    const tbl = (t==="deflector") ? CFG.DEFLECTOR_SIZES : CFG.WALL_SIZES;
+    const tbl = (t==="deflector") ? PRESETS.deflectorLength : PRESETS.wallLength;
+    const defLen = (t==="deflector") ? CFG.DEFAULT_DEFLECTOR_LENGTH : CFG.DEFAULT_WALL_LENGTH;
     const row = document.createElement("div"); row.className="prop-row";
     const lab = document.createElement("label"); lab.textContent="length";
     const inp = document.createElement("input"); inp.type="number"; inp.min=10; inp.value=fmtNum(o.length);
     inp.addEventListener("change", ()=>{
       stopPlay(); pushUndo();
-      o.length = Math.max(10, parseFloat(inp.value)||tbl.M);
+      o.length = Math.max(10, parseFloat(inp.value)||defLen);
       commit();
     });
-    row.append(lab, inp, segControl(["S","M","L"], letterOfLength(o.length,tbl), (L)=>{
+    row.append(lab, inp, segControl(["S","M","L"], letterOfValue(o.length,tbl), (L)=>{
       stopPlay(); pushUndo(); o.length = tbl[L]; commit(); renderProps();
     }, L=>`${L}·${tbl[L]}`));
     box.appendChild(row);
@@ -6576,30 +6773,85 @@ function renderProps(){
   }
   if (ANGLED.has(t))
     box.appendChild(propNum("angle °", "angle", o, {step:15}));
-  if (t === "deflector" || t === "ballast"
-      || ((t === "sliding_wall" || t === "sliding_hazard") && o.plateId == null)){
-    const options = t === "deflector" ? ["none","gravity","L","R"] : ["gravity","L","R"];
-    const current = (o.group === "L" || o.group === "R") ? o.group
-      : (t === "deflector" && o.gravity !== true) ? "none" : "gravity";
+  if (t === "plunger"){
+    const row = document.createElement("div"); row.className = "prop-row";
+    const lab = document.createElement("label"); lab.textContent = "power (apex px)";
+    const inp = document.createElement("input"); inp.type = "number"; inp.step = 10;
+    inp.min = SIM.PLUNGER_MIN_HEIGHT;
+    inp.placeholder = String(SIM.PLUNGER_MAX_HEIGHT);
+    inp.value = (typeof o.power === "number") ? fmtNum(o.power) : "";
+    inp.addEventListener("change", ()=>{
+      stopPlay(); pushUndo();
+      const v = parseFloat(inp.value);
+      if (inp.value.trim() === "" || !isFinite(v)) delete o.power;
+      else o.power = v;
+      commit();
+    });
+    row.append(lab, inp);
+    box.appendChild(row);
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = "fixed aim. crank pulls the spring, Up fires. power = apex of a straight-up full-charge shot; blank = default";
+    box.appendChild(hint);
+  }
+  if (MOTION_ORDER[t]){
+    // motion picks how the object moves; the rows below follow it. Switching
+    // drops the fields the new motion does not read (applyMotionFields).
+    const m = motionOf(o);
+    const row = document.createElement("div"); row.className = "prop-row";
+    const lab = document.createElement("label"); lab.textContent = "motion";
+    const sel = document.createElement("select");
+    for (const opt of MOTION_ORDER[t]){
+      const op = document.createElement("option");
+      op.value = opt; op.textContent = opt;
+      if (opt === defaultMotionOf(t)) op.textContent += " (default)";
+      sel.appendChild(op);
+    }
+    // An invalid authored motion shows as the default; validation names it.
+    sel.value = MOTION_ORDER[t].includes(m) ? m : defaultMotionOf(t);
+    sel.addEventListener("change", ()=>{
+      stopPlay(); pushUndo();
+      o.motion = sel.value;
+      applyMotionFields(o);
+      commit(); renderProps();
+    });
+    row.append(lab, sel);
+    box.appendChild(row);
+    const hint = document.createElement("div"); hint.className = "hint";
+    hint.textContent = m === "crank"
+      ? "standard: Left/Right selects its group. the crank moves the whole group"
+      : m === "gravity"
+      ? "follows device tilt in both level modes. in standard the ball's down stays fixed"
+      : m === "plate"
+      ? "driven by the pressure_plate whose link is plateId"
+      : m === "auto"
+      ? (t === "deflector" ? "sweeps minAngle..maxAngle and back on its own" : "slides end to end and back on its own")
+      : "static blade. not moved by tilt or the crank";
+    box.appendChild(hint);
+    if (m === "crank"){
+      const grow = document.createElement("div"); grow.className = "prop-row";
+      const glab = document.createElement("label"); glab.textContent = "group";
+      grow.append(glab, segControl(["L","R"], o.group, (pick)=>{
+        stopPlay(); pushUndo(); o.group = pick; commit(); renderProps();
+      }));
+      box.appendChild(grow);
+    }
+  }
+  if (t === "ballast"){
+    const options = ["gravity","L","R"];
+    const current = (o.group === "L" || o.group === "R") ? o.group : "gravity";
     const row = document.createElement("div"); row.className = "prop-row";
     const lab = document.createElement("label"); lab.textContent = "drive";
     row.append(lab, segControl(options, current, (pick)=>{
       stopPlay(); pushUndo();
       delete o.group;
-      delete o.gravity;
       if (pick === "L" || pick === "R") o.group = pick;
-      else if (pick === "gravity" && t === "deflector") o.gravity = true;
       commit(); renderProps();
     }));
     box.appendChild(row);
     const hint = document.createElement("div"); hint.className = "hint";
     hint.textContent = current === "L" || current === "R"
       ? "standard: " + current + " selects this. the crank moves the whole group"
-      : current === "gravity"
-      ? (t === "ballast"
-          ? "both modes: parks at the downhill stop. the ball's down stays fixed in standard. tilt ballast is not a crankable"
-          : "follows device tilt in both level modes. in standard the ball's down stays fixed")
-      : "static blade. not moved by tilt or the crank";
+      : "both modes: parks at the downhill stop. the ball's down stays fixed in standard. tilt ballast is not a crankable";
     box.appendChild(hint);
   }
   if (t === "pressure_plate"){
@@ -6634,14 +6886,14 @@ function renderProps(){
       box.appendChild(hint);
     }
   }
-  if (t === "sliding_wall" || t === "sliding_hazard"){
+  if ((t === "sliding_wall" || t === "sliding_hazard") && motionOf(o) === "plate"){
     box.appendChild(propNum("plateId", "plateId", o, {min:1, step:1}));
     box.appendChild(propNum("pressedPosition", "pressedPosition", o, {min:0, max:1, step:0.05, clamp:[0,1]}));
     const ph = document.createElement("div"); ph.className="hint";
     ph.textContent = "plateId links to a pressure_plate; objectPosition is rest, pressedPosition is driven target";
     box.appendChild(ph);
   }
-  if (t==="sweeper"){
+  if (t==="deflector" && motionOf(o) === "auto"){
     box.appendChild(propNum("minAngle °", "minAngle", o, {step:5}));
     box.appendChild(propNum("maxAngle °", "maxAngle", o, {step:5}));
   }
@@ -6650,7 +6902,7 @@ function renderProps(){
   if (SLIDE_TYPES.has(t)){
     box.appendChild(propNum("slideAngle °", "slideAngle", o, {step:15}));
     {
-      const tbl = CFG.LEGACY_SLIDER_SPANS;
+      const tbl = PRESETS.slideRange;
       const row = document.createElement("div"); row.className="prop-row";
       const lab = document.createElement("label"); lab.textContent="slideRange";
       const inp = document.createElement("input"); inp.type="number"; inp.min=10; inp.step=1;
@@ -6660,7 +6912,7 @@ function renderProps(){
         o.slideRange = Math.max(10, parseFloat(inp.value)||CFG.DEFAULT_SLIDER_SPAN);
         commit();
       });
-      row.append(lab, inp, segControl(["S","M","L"], letterOfValue(o.slideRange, tbl), (L)=>{
+      row.append(lab, inp, segControl(["S","M","L"], letterOfValue(slideSpan(o), tbl), (L)=>{
         stopPlay(); pushUndo(); o.slideRange = tbl[L]; commit(); renderProps();
       }, L=>`${L}·${tbl[L]}`));
       box.appendChild(row);
@@ -6683,10 +6935,10 @@ function renderProps(){
     row.append(lab, rng, num);
     box.appendChild(row);
   }
-  if (t==="sweeper" || t==="toggle_wall" || t==="moving_wall" || t==="moving_hazard"){
-    const tbl = speedTableForType(t);
-    const step = t==="sweeper" ? 0.05 : t==="toggle_wall" ? 5 : 0.001;
-    const unitHint = t==="sweeper" ? "°/frame"
+  if (t==="toggle_wall" || isAutoMover(o)){
+    const tbl = speedPresetsForType(t);
+    const step = t==="deflector" ? 0.05 : t==="toggle_wall" ? 5 : 0.001;
+    const unitHint = t==="deflector" ? "°/frame"
       : t==="toggle_wall" ? "frames between snaps"
       : "position/frame";
     const row = document.createElement("div"); row.className="prop-row";
@@ -6703,7 +6955,7 @@ function renderProps(){
       o.speed = v;
       commit();
     });
-    row.append(lab, inp, segControl(["S","M","F"], letterOfValue(o.speed, tbl), (L)=>{
+    row.append(lab, inp, segControl(["S","M","F"], letterOfValue(resolveSpeed(t, o.speed), tbl), (L)=>{
       stopPlay(); pushUndo(); o.speed = tbl[L]; commit(); renderProps();
     }, L=>`${L}·${tbl[L]}`));
     box.appendChild(row);
@@ -6721,6 +6973,9 @@ function renderProps(){
     });
     row.append(lab, inp);
     box.appendChild(row);
+    const tokHint = document.createElement("div"); tokHint.className="hint";
+    tokHint.textContent = "icons: [up] [down] [left] [right] [crank] [dpad]";
+    box.appendChild(tokHint);
     {
       const row2 = document.createElement("div"); row2.className="prop-row";
       const lab2 = document.createElement("label"); lab2.textContent="align";
@@ -6765,7 +7020,6 @@ function renderProps(){
   act.append(bd,bx,br);
   box.appendChild(act);
 }
-function letterOfLength(len, tbl){ return letterOfValue(len, tbl); }
 function letterOfValue(val, tbl){
   const keys = Object.keys(tbl);
   for (const k of keys) if (tbl[k] === val) return k;
@@ -6832,6 +7086,9 @@ function replaceSel(newType){
     if (k === "type" || k === "x" || k === "y") continue;
     if (old[k] !== undefined) neu[k] = old[k];
   }
+  // A carried motion may not exist on the new type (plate on a deflector),
+  // and its dependent fields may not apply; settle both.
+  applyMotionFields(neu);
   level.objects[selIdx] = neu;
   setReplaceMode(false);
   commit();
@@ -6906,7 +7163,7 @@ window.addEventListener("mousemove", e=>{
   } else if (drag.mode === "rotate"){
     const [cx,cy] = bodyCenterScreen(o, drag.idx);
     const a = Math.atan2(sy-cy, sx-cx)*180/Math.PI;
-    if (o.type === "launcher"){
+    if (AIM_TYPES.has(o.type)){
       o.angle = snapA(launcherScreenAngle(a), e.shiftKey);
     } else if (followsTilt(o) && o.type === "deflector"){
       o.angle = snapA(a + viewRollDeg, e.shiftKey);
@@ -7257,6 +7514,7 @@ el("btnIO").addEventListener("click", ()=>{
 el("btnCloseIO").addEventListener("click", ()=> el("ioDrawer").classList.remove("open"));
 el("btnExport").addEventListener("click", ()=>{
   el("ioText").value = exportLevel(level);
+  refreshAll();
   updateIoBytes();
   ioMsg("Exported Lua. Paste into levels.lua.", false);
 });
