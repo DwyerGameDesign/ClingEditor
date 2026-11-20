@@ -198,7 +198,7 @@
       <option value="scrollingworld">scrollingworld</option>
     </select>
   </label>
-  <label id="worldCtl" class="world-ctl dev-only" title="World size in pixels (scrollingworld only). W 400–2000, H 240–1200, integers. Positions are bottom-left origin, Y-up; growing W/H adds space on the right/top.">world
+  <label id="worldCtl" class="world-ctl" title="Level size in pixels: width 400–2000, height 240–1200. The screen is 400×240; a bigger level scrolls to follow the ball. Growing it adds space on the right / top.">size
     <input id="lvWorldW" type="number" min="400" max="2000" step="1" value="400">&times;<input id="lvWorldH" type="number" min="240" max="1200" step="1" value="240">
     <span id="worldErr" class="world-err"></span>
   </label>
@@ -7537,10 +7537,12 @@ function syncLevelPanel(){
   syncWorldPanel();
   syncModeChrome();
 }
-/** World W/H inputs: shown for a scrolling mode only. Unset world reads as 400x240. */
+/** Size W/H inputs. Players never see the mode select, so size drives it
+    (onWorldInput): standard and scrollingworld both show the inputs, reading
+    400x240 when no world is set. gravityflip has no world, so they hide. */
 function syncWorldPanel(){
   const scroll = LEVEL_MODE_SPECS[levelModeOf(level)].scroll;
-  el("worldCtl").style.display = scroll ? "" : "none";
+  el("worldCtl").style.display = levelModeOf(level) === "gravityflip" ? "none" : "";
   const w = level.world ? level.world.w : CFG.SCREEN_W;
   const h = level.world ? level.world.h : CFG.SCREEN_H;
   const iw = el("lvWorldW"), ih = el("lvWorldH");
@@ -7568,13 +7570,28 @@ el("lvMode").addEventListener("change", ()=>{
   commit();
 });
 function onWorldInput(){
-  // Number("") is 0, which worldError reports, so a cleared box shows an error.
-  const w = Number(el("lvWorldW").value), h = Number(el("lvWorldH").value);
-  const cur = level.world || {w: CFG.SCREEN_W, h: CFG.SCREEN_H};
-  if (cur.w === w && cur.h === h) return;
+  const scroll = LEVEL_MODE_SPECS[levelModeOf(level)].scroll;
+  const cur = scroll && level.world ? level.world : {w: CFG.SCREEN_W, h: CFG.SCREEN_H};
+  // Clamp rather than reject: a player typing 3000 means "as wide as allowed".
+  // A cleared or non-numeric box keeps the current value.
+  const fit = (v, lo, hi, keep) => Number.isFinite(v) && String(v) !== "" ? Math.min(hi, Math.max(lo, Math.round(v))) : keep;
+  const rawW = el("lvWorldW").value, rawH = el("lvWorldH").value;
+  const w = rawW === "" ? cur.w : fit(Number(rawW), CFG.SCREEN_W, CFG.WORLD_MAX_W, cur.w);
+  const h = rawH === "" ? cur.h : fit(Number(rawH), CFG.SCREEN_H, CFG.WORLD_MAX_H, cur.h);
+  const screenSized = w === CFG.SCREEN_W && h === CFG.SCREEN_H;
+  if (cur.w === w && cur.h === h && (scroll || screenSized)){ syncWorldPanel(); return; }
   pushUndo();
-  level.world = {w, h};
-  syncWorldPanel();
+  // The size picks the mode: bigger than the screen scrolls, screen-sized is
+  // standard (scrollingworld at 400x240 plays the same, so drop back to the
+  // default and keep both exports clean).
+  if (screenSized){
+    delete level.world;
+    if (scroll) level.mode = "standard";
+  } else {
+    level.world = {w, h};
+    level.mode = "scrollingworld";
+  }
+  syncLevelPanel();
   commit();
 }
 el("lvWorldW").addEventListener("change", onWorldInput);
