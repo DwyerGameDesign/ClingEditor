@@ -160,7 +160,9 @@
   #ioBytes{font-size:11px; white-space:nowrap}
   #pubRow{border-top:1px solid #444; padding-top:6px}
   #pubRow input[type=text]{background:#101010; color:#eee; border:1px solid #555; font-family:var(--mono); font-size:12px; padding:3px 6px}
-  #pubCode{width:9ch; text-transform:uppercase; letter-spacing:1px}
+  /* box-sizing is border-box, so the width must also cover padding, border and
+     the per-glyph letter-spacing, plus a little room for the caret. */
+  #pubCode{width:calc(9ch + 9px + 24px); text-transform:uppercase; letter-spacing:1px}
   #pubName{width:22ch}
   #pubTags{display:flex; gap:4px; flex-wrap:wrap}
   #pubTags label{font-size:11px; border:1px solid #555; padding:2px 6px; cursor:pointer; user-select:none}
@@ -277,7 +279,7 @@
   <div class="row" id="pubRow">
     <strong>Upload to Playdate</strong>
     <label class="muted" title="Playdate → Community → My Levels → Editor tab">Creator code
-      <input type="text" id="pubCode" maxlength="9" spellcheck="false" autocomplete="off"></label>
+      <input type="text" id="pubCode" maxlength="16" placeholder="ABCD-2345" spellcheck="false" autocomplete="off"></label>
     <label class="muted">Name <input type="text" id="pubName" maxlength="32" spellcheck="false"></label>
     <span class="muted">Tags (1–3)</span><span id="pubTags"></span>
     <button id="btnPublish" class="primary">Upload as draft</button>
@@ -7853,7 +7855,28 @@ function pubMsg(msg, isErr){
     });
     box.appendChild(l);
   }
-  try{ el("pubCode").value = localStorage.getItem("cling-editor-creator-code") || ""; }catch(e){}
+  // Shown as ABCD-2345 like on the Playdate: the dash appears as soon as the
+  // 4th character is typed, so nobody types their own and wonders if it counts.
+  // When deleting, the trailing dash is dropped instead, or backspace would stick.
+  const codeIn = el("pubCode");
+  const formatCode = (chars, inserting) =>
+    chars.length > 4 ? chars.slice(0, 4) + "-" + chars.slice(4)
+    : (chars.length === 4 && inserting) ? chars + "-" : chars;
+  codeIn.addEventListener("input", (e)=>{
+    const raw = codeIn.value;
+    const caret = codeIn.selectionStart ?? raw.length;
+    const before = normCreatorCode(raw.slice(0, caret)).length;
+    const chars = normCreatorCode(raw).slice(0, 8);
+    const inserting = !(e.inputType || "").startsWith("delete");
+    const out = formatCode(chars, inserting);
+    codeIn.value = out;
+    // Put the caret back after the same number of code characters.
+    let pos = 0, seen = 0;
+    while (pos < out.length && seen < Math.min(before, chars.length)){ if (out[pos] !== "-") seen++; pos++; }
+    if (out[pos] === "-" && inserting) pos++;
+    codeIn.setSelectionRange(pos, pos);
+  });
+  try{ codeIn.value = formatCode(normCreatorCode(localStorage.getItem("cling-editor-creator-code")).slice(0, 8), false); }catch(e){}
   el("btnIO").addEventListener("click", ()=>{ el("pubName").value = level.name || ""; });
 })();
 el("btnPublish").addEventListener("click", async ()=>{
